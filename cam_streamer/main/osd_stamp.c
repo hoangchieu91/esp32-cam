@@ -676,7 +676,7 @@ static void draw_roi_target_box(uint8_t *rgb565, uint16_t width, uint16_t height
     int rx1 = rx0 + rw - 1;
     int ry1 = ry0 + rh - 1;
     if (rx1 >= width) rx1 = width - 1;
-    if (ry1 >= height - 28) ry1 = height - 28;
+    if (ry1 >= height - 2) ry1 = height - 2;
     if (rx1 <= rx0 + 10 || ry1 <= ry0 + 10) return;
 
     // 0x07E0 = Bright Green in RGB565
@@ -803,7 +803,7 @@ bool process_frame_osd_and_ai(
     }
 
     if (g_cfg.osd_enable) {
-        if (g_cfg.roi_draw_osd) {
+        if (g_cfg.roi_draw_osd && g_cfg.meter_mode < 3) {
             draw_roi_target_box(rgb_buf, width, height);
         }
 

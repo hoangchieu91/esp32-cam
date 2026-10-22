@@ -2154,17 +2154,38 @@ function toggleInteractiveRoi() {
 function updateRoiBox() {
   const rx = parseInt(document.getElementById('rng-rx').value) || 0;
   const ry = parseInt(document.getElementById('rng-ry').value) || 0;
-  const rw = parseInt(document.getElementById('rng-rw').value) || 50;
-  const rh = parseInt(document.getElementById('rng-rh').value) || 40;
+  const rw = Math.min(100 - rx, parseInt(document.getElementById('rng-rw').value) || 50);
+  const rh = Math.min(100 - ry, parseInt(document.getElementById('rng-rh').value) || 40);
   document.getElementById('lbl-rx').textContent = rx + '%';
   document.getElementById('lbl-ry').textContent = ry + '%';
   document.getElementById('lbl-rw').textContent = rw + '%';
   document.getElementById('lbl-rh').textContent = rh + '%';
   const box = document.getElementById('roi-overlay');
-  box.style.left = rx + '%';
-  box.style.top = ry + '%';
-  box.style.width = Math.min(100 - rx, rw) + '%';
-  box.style.height = Math.min(100 - ry, rh) + '%';
+  if (!box) return;
+  const rotDeg = parseInt(document.getElementById('rng-rot-deg')?.value) || 0;
+  if (rotDeg <= -85 && rotDeg >= -95) {
+    // Exact 4:3 aspect-corrected projection for rotate(-90deg) scale(0.75)
+    box.style.left = (50 + 0.5625 * (ry - 50)).toFixed(2) + '%';
+    box.style.width = (0.5625 * rh).toFixed(2) + '%';
+    box.style.top = (100 - (rx + rw)).toFixed(2) + '%';
+    box.style.height = rw.toFixed(2) + '%';
+  } else if (rotDeg >= 85 && rotDeg <= 95) {
+    // Exact 4:3 aspect-corrected projection for rotate(+90deg) scale(0.75)
+    box.style.left = (50 + 0.5625 * (50 - (ry + rh))).toFixed(2) + '%';
+    box.style.width = (0.5625 * rh).toFixed(2) + '%';
+    box.style.top = rx.toFixed(2) + '%';
+    box.style.height = rw.toFixed(2) + '%';
+  } else if (Math.abs(rotDeg) >= 175) {
+    box.style.left = (100 - (rx + rw)) + '%';
+    box.style.top = (100 - (ry + rh)) + '%';
+    box.style.width = rw + '%';
+    box.style.height = rh + '%';
+  } else {
+    box.style.left = rx + '%';
+    box.style.top = ry + '%';
+    box.style.width = rw + '%';
+    box.style.height = rh + '%';
+  }
 }
 
 function setRoiPreset(x, y, w, h) {
@@ -2276,6 +2297,7 @@ function previewRotationDeg(deg) {
       sImg.style.transform = `rotate(${d}deg) scale(${scale})`;
     }
   }
+  updateRoiBox();
 }
 
 function setRotPreset(deg) {

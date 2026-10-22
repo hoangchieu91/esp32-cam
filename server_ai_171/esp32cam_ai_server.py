@@ -103,9 +103,9 @@ class SmartMeterVisionEngine:
     @staticmethod
     def get_roi_rect(w: int, h: int, rx_pct: int, ry_pct: int, rw_pct: int, rh_pct: int) -> Tuple[int, int, int, int]:
         x0 = max(0, min(w - 16, int(w * rx_pct / 100.0)))
-        y0 = max(0, min(h - 32, int(h * ry_pct / 100.0)))
+        y0 = max(0, min(h - 16, int(h * ry_pct / 100.0)))
         rw = max(16, min(w - x0, int(w * rw_pct / 100.0)))
-        rh = max(16, min(h - 28 - y0, int(h * rh_pct / 100.0)))
+        rh = max(16, min(h - 4 - y0, int(h * rh_pct / 100.0)))
         return x0, y0, rw, rh
 
     @staticmethod
@@ -477,14 +477,16 @@ class SmartMeterVisionEngine:
         conf_sum = 0.0
         valid_cnt = 0
 
-        # 1. Direct Red Pointer Hub-to-Tip Distance Transform Detector (lower dial arc y >= 0.43*rh)
+        # 1. Direct Red Pointer Hub-to-Tip Distance Transform Detector (lower dial arc y >= 0.41*rh)
         hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
         hc, sc, vc = cv2.split(hsv)
-        red_mask = (((hc <= 16) | (hc >= 160)) & (sc >= 40) & (vc >= 38)).astype(np.uint8) * 255
-        # Mask out upper horizontal roller drum zone (H 00304 m3 sits at y ~ 0.25..0.41*rh)
-        red_mask[:int(rh * 0.43), :] = 0
-        red_mask[:, :3] = 0
-        red_mask[:, max(0, rw - 3):] = 0
+        b_ch, g_ch, r_ch = cv2.split(roi_bgr)
+        rg_diff = r_ch.astype(np.int16) - np.maximum(g_ch, b_ch).astype(np.int16)
+        red_mask = ((((hc <= 16) | (hc >= 160)) & (sc >= 45) & (vc >= 36)) | (rg_diff >= 22)).astype(np.uint8) * 255
+        # Mask out upper horizontal roller drum zone (H 0037.3 m3 sits at y ~ 0.25..0.39*rh)
+        red_mask[:int(rh * 0.41), :] = 0
+        red_mask[:, :2] = 0
+        red_mask[:, max(0, rw - 2):] = 0
         k_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, k_el)
         cnts, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -524,7 +526,23 @@ class SmartMeterVisionEngine:
             red_pointers.sort(key=lambda item: -item[0])
             red_pointers = red_pointers[:4]
             scale_offset = 2 if len(red_pointers) == 3 else 1
+            # Concentric sub-dial scale ring anchors on GB/T 778-2018 3-pointer meter face
+            std_3dial_rings = [
+                (int(rw * 0.862), int(rh * 0.484)),
+                (int(rw * 0.784), int(rh * 0.690)),
+                (int(rw * 0.530), int(rh * 0.758)),
+            ]
+            std_ring_r = int(max(18, round(rw * 0.092)))
             for idx, (cx_i, cy_i, tx_i, ty_i, r_i, ang, cf) in enumerate(red_pointers):
+                if len(red_pointers) == 3 and idx < 3:
+                    ax, ay = std_3dial_rings[idx]
+                    if np.hypot(cx_i - ax, cy_i - ay) <= rw * 0.08:
+                        vx, vy = float(tx_i - cx_i), float(ty_i - cy_i)
+                        norm = max(1e-3, np.hypot(vx, vy))
+                        cx_i, cy_i = ax, ay
+                        r_i = std_ring_r
+                        tx_i = int(round(cx_i + (vx / norm) * (r_i * 0.82)))
+                        ty_i = int(round(cy_i + (vy / norm) * (r_i * 0.82)))
                 cont_val = (ang / 36.0) % 10.0
                 raw_cont.append(cont_val)
                 valid_cnt += 1
@@ -828,8 +846,8 @@ class SmartMeterVisionEngine:
         clean_hint_sp = (hint_spec or "").strip()
 
         # Bounding boxes on upright ROI for Serial Plate (middle-left) and Standard/R-Ratio Header (top-center)
-        sn_box = [int(rw * 0.18), int(rh * 0.58), int(rw * 0.23), int(rh * 0.07)]
-        sp_box = [int(rw * 0.35), int(rh * 0.25), int(rw * 0.43), int(rh * 0.11)]
+        sn_box = [int(rw * 0.195), int(rh * 0.542), int(rw * 0.195), int(rh * 0.056)]
+        sp_box = [int(rw * 0.380), int(rh * 0.185), int(rw * 0.400), int(rh * 0.092)]
 
         # If manual mode (serial_auto == 0) and user provided serial, honor manual entry directly
         if int(serial_auto) == 0 and clean_hint_sn and clean_hint_sn.upper() != "AUTO":
@@ -1967,12 +1985,12 @@ def draw_annotations(img_bgr: np.ndarray, analysis: Dict[str, Any]) -> np.ndarra
             roller_tenths = int(np.floor(sv_flt * 10.0 + 1e-6))
             blk_int = roller_tenths // 10
             red_tenth = roller_tenths % 10
-            bx0, by0, bw0, bh0 = int(sw_r * 0.36), int(sh_r * 0.29), int(sw_r * 0.28), int(sh_r * 0.08)
+            bx0, by0, bw0, bh0 = int(sw_r * 0.345), int(sh_r * 0.295), int(sw_r * 0.285), int(sh_r * 0.082)
             rx0 = bx0 + bw0
-            rw0 = int(sw_r * 0.07)
-            cv2.rectangle(roi_sub, (bx0, by0), (bx0 + bw0, by0 + bh0), (0, 255, 128), 1)
-            cv2.rectangle(roi_sub, (rx0, by0), (rx0 + rw0, by0 + bh0), (80, 80, 255), 2)
-            cv2.putText(roi_sub, f"{blk_int:04d}.{red_tenth}(x0.1)", (max(2, bx0 - 4), max(14, by0 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (120, 255, 120), 1)
+            rw0 = int(sw_r * 0.075)
+            cv2.rectangle(roi_sub, (bx0, by0), (bx0 + bw0, by0 + bh0), (0, 255, 128), 2)
+            cv2.rectangle(roi_sub, (rx0, by0), (rx0 + rw0, by0 + bh0), (60, 60, 255), 2)
+            cv2.putText(roi_sub, f"{blk_int:04d}.{red_tenth}(x0.1)", (max(2, bx0), min(sh_r - 4, by0 + bh0 + 13)), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (100, 255, 140), 1)
 
         sn_box = mb.get("serial_box")
         if sn_box and len(sn_box) == 4:
