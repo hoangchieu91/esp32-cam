@@ -523,6 +523,7 @@ class SmartMeterVisionEngine:
             # Sort along standard rotary water meter arc: Right-to-Left (x descending)
             red_pointers.sort(key=lambda item: -item[0])
             red_pointers = red_pointers[:4]
+            scale_offset = 2 if len(red_pointers) == 3 else 1
             for idx, (cx_i, cy_i, tx_i, ty_i, r_i, ang, cf) in enumerate(red_pointers):
                 cont_val = (ang / 36.0) % 10.0
                 raw_cont.append(cont_val)
@@ -530,7 +531,7 @@ class SmartMeterVisionEngine:
                 conf_sum += cf
                 dials_meta.append({
                     "index": idx,
-                    "scale": round(0.1 ** (idx + 1), 4),
+                    "scale": round(0.1 ** (idx + scale_offset), 4),
                     "center": [cx_i, cy_i],
                     "tip": [tx_i, ty_i],
                     "radius": r_i,
@@ -1023,12 +1024,15 @@ class MeterStateTracker:
         val = self._parse_float(baseline_str)
         if val is None:
             return {"status": "error", "message": "Invalid numeric baseline"}
+        # If user entered 5-roller digits without decimal (e.g. '00374' -> 37.4 m3) or legacy 10x value ('0374.843' -> 37.4843)
+        if val >= 100.0:
+            val = round(val / 10.0, 4)
         with self.lock:
             self.states[device] = {
                 "last_value": round(val, 4),
                 "last_epoch": time.time(),
                 "flow_lpm": 0.0,
-                "baseline_seed": baseline_str.strip(),
+                "baseline_seed": f"{val:09.4f}",
                 "updated_at": now_vn_str()
             }
             self._save()
@@ -1051,13 +1055,19 @@ class MeterStateTracker:
                 st = dict(self.states.get("esp32-cam") or self.states.get("default") or {})
                 if st:
                     self.states[device] = st
+            # Auto-migrate any legacy 10x state value (e.g. 371.843 -> 37.1843 m3)
+            if st and st.get("last_value") is not None and float(st["last_value"]) >= 100.0:
+                st["last_value"] = round(float(st["last_value"]) / 10.0, 4)
+                self._save()
             # If user supplied a new baseline seed from ESP32 UI, anchor to it ONLY if we don't already have a higher validated reading
             if baseline_str and baseline_str.strip():
                 b_val = self._parse_float(baseline_str)
+                if b_val is not None and b_val >= 100.0:
+                    b_val = round(b_val / 10.0, 4)
                 cur_last = st.get("last_value")
                 if b_val is not None and st.get("baseline_seed") != baseline_str.strip():
                     # Ignore echo when ESP32 sends back the current reading as baseline
-                    if cur_last is None or (b_val > float(cur_last) + 0.005):
+                    if cur_last is None or (b_val > float(cur_last) + 0.0005):
                         st = {
                             "last_value": round(b_val, 4),
                             "last_epoch": st.get("last_epoch", now_ts - 60.0),
@@ -1081,37 +1091,42 @@ class MeterStateTracker:
 
             raw_frac = float(dial_info.get("raw_fraction", 0.0))
             dial_digits = dial_info.get("dial_digits", "----")
-            # On 3-pointer GB/T 778-2018 meters (4 black + 1 red roller + 3 red pointers x0.01, x0.001, x0.0001),
-            # 1 unit of the 5-roller integer is 0.1 m3 = 100 Liters, and .001 pointer is 0.1 Liter.
-            liters_per_unit = 100.0 if (dial_digits != "----" and len(dial_digits) == 3) else 1000.0
-            max_delta_m3 = max(0.18, (max(5.0, float(max_flow_lpm)) / 60.0) * dt_sec / liters_per_unit)
+            # On 3-pointer GB/T 778-2018 meters (4 black rollers [x1000..x1] + 1 red roller [x0.1] + 3 red pointers [x0.01, x0.001, x0.0001]):
+            # - The 5 rollers represent XXXX.Y m3 (where .Y is the 5th red roller = 0.1 m3 = 100 Liters)
+            # - The 3 red pointers represent 0.0ZWV m3 (from 0.0000 to 0.0999 m3)
+            # - 1.0 m3 = 1000.0 Liters standard
+            is_3ptr_red_roller = (dial_digits != "----" and len(dial_digits) == 3)
+            ptr_m3 = round(raw_frac * 0.1, 4) if is_3ptr_red_roller else round(raw_frac, 4)
+            roller_step = 0.1 if is_3ptr_red_roller else 1.0
+            liters_per_unit = 1000.0
+            max_delta_m3 = max(0.025, (max(5.0, float(max_flow_lpm)) / 60.0) * dt_sec / liters_per_unit)
             ocr_val = self._parse_float(lcd_val_str)
             if ocr_val is None:
                 ocr_val = self._parse_float(seg7_val_str)
+            if ocr_val is not None and "." not in lcd_val_str and is_3ptr_red_roller and ocr_val >= 100.0:
+                ocr_val = round(ocr_val / 10.0, 1)
 
-            # Construct raw candidate reading V_cand
+            # Construct raw candidate reading V_cand (XXXX.Y from 4 black + 1 red roller + ZWV from 3 red pointers)
             ocr_plausible_for_dial = (
                 ocr_val is not None
-                and "." not in lcd_val_str
-                and ocr_val >= 10.0
-                and (prev_val is None or abs((float(int(ocr_val)) + raw_frac) - prev_val) <= max(1.0, max_delta_m3 * 2.0))
+                and ocr_val >= 1.0
+                and (prev_val is None or abs((np.floor(ocr_val / roller_step + 1e-6) * roller_step + ptr_m3) - prev_val) <= max(0.2, max_delta_m3 * 2.0))
             )
             if ocr_plausible_for_dial and dial_digits != "----":
-                # Integer drum from OCR + Fractional pointers from Rotary Dials
-                int_drum = int(ocr_val)
-                cand_val = float(int_drum) + raw_frac
+                roller_part = np.floor(ocr_val / roller_step + 1e-6) * roller_step
+                cand_val = round(float(roller_part) + ptr_m3, 4)
             elif prev_val is not None and dial_digits != "----":
-                # Use previous validated integer m3 part + live fractional dial pointers
-                prev_int = int(np.floor(prev_val))
-                prev_frac = prev_val - prev_int
-                # Check if first red pointer wrapped around past 0 (water meter pointers only rotate forward)
-                if raw_frac < (prev_frac - 0.015):
-                    prev_int += 1
-                cand_val = float(prev_int) + raw_frac
+                # Use previous validated 5-roller part (XXXX.Y) + live 3-pointer fraction (0.0ZWV)
+                prev_roller = np.floor(prev_val / roller_step + 1e-6) * roller_step
+                prev_ptr = prev_val - prev_roller
+                # When D1 (x0.01) wraps past 0, the 5th red roller (x0.1) advances by +0.1 m3
+                if ptr_m3 < (prev_ptr - 0.0015 * (1.0 if is_3ptr_red_roller else 10.0)):
+                    prev_roller = round(prev_roller + roller_step, 4)
+                cand_val = round(float(prev_roller) + ptr_m3, 4)
             elif ocr_val is not None:
                 cand_val = ocr_val
             elif dial_digits != "----":
-                cand_val = raw_frac
+                cand_val = ptr_m3
             else:
                 cand_val = None
 
@@ -1130,47 +1145,47 @@ class MeterStateTracker:
                 flow_lpm = 0.0
                 f_state = "INIT_SEED"
                 new_valid_epoch = now_ts
-                detail = f"Khởi tạo V(0)={final_val:.4f} m³ | Kim: .{dial_digits}"
+                red_dig = int(np.floor(final_val * 10.0 + 1e-6)) % 10
+                detail = f"Khởi tạo V(0)={final_val:09.4f} m³ | Số đỏ(×0.1): .{red_dig} | 3 Kim: {dial_digits}"
             elif cand_val is None:
                 # Hold previous valid value when frame is blurred/occluded
                 final_val = round(prev_val, 4)
                 flow_lpm = round(prev_flow * 0.8, 2)
                 f_state = "HOLD_PREV"
-                detail = f"Giữ số cũ V(t-1)={final_val:.4f} m³ (Ảnh mờ/Che khuất)"
+                detail = f"Giữ số cũ V(t-1)={final_val:09.4f} m³ (Ảnh mờ/Che khuất)"
             else:
                 delta = cand_val - prev_val
                 # Check 2-frame forward consensus (when camera was offline while water flowed forward)
                 is_forward_consensus = (
-                    0.0 < delta <= 15.0
+                    0.0 < delta <= 2.5
                     and prev_pending is not None
-                    and abs(cand_val - float(prev_pending)) <= 0.025
+                    and abs(cand_val - float(prev_pending)) <= 0.003
                 )
                 if 0.0 <= delta <= max_delta_m3 or is_forward_consensus:
                     final_val = round(cand_val, 4)
+                    red_dig = int(np.floor(final_val * 10.0 + 1e-6)) % 10
                     if is_forward_consensus and delta > max_delta_m3:
                         flow_lpm = 0.0
-                        detail = f"Đồng bộ bù (+{delta*liters_per_unit:.1f} L) | Kim: .{dial_digits}"
+                        detail = f"Đồng bộ bù (+{delta*liters_per_unit:.1f} L) | Số đỏ(×0.1): .{red_dig} | 3 Kim: {dial_digits}"
                     else:
                         inst_flow_lpm = (delta * liters_per_unit) / max(0.5, dt_sec / 60.0)
                         flow_lpm = round(min(max_flow_lpm, 0.6 * inst_flow_lpm + 0.4 * prev_flow), 2)
-                        detail = f"Hợp lệ (+{delta*liters_per_unit:.1f} L / {int(dt_sec)}s) | Kim: .{dial_digits}"
+                        detail = f"Hợp lệ (+{delta*liters_per_unit:.1f} L / {int(dt_sec)}s) | Số đỏ(×0.1): .{red_dig} | 3 Kim: {dial_digits}"
                     f_state = "VALID_MONOTONIC"
                     new_valid_epoch = now_ts
-                elif -0.008 <= delta < 0.0:
+                elif -0.0010 <= delta < 0.0:
                     # Minor pointer jitter / water hammer back-oscillation -> clamp to V(t-1)
                     final_val = round(prev_val, 4)
                     flow_lpm = 0.0
                     f_state = "CLAMPED_JITTER"
                     new_valid_epoch = now_ts
-                    detail = f"Khử rung kim ({delta*liters_per_unit:.1f}L -> Giữ {final_val:.4f} m³)"
+                    detail = f"Khử rung kim ({delta*liters_per_unit:.1f}L -> Giữ {final_val:09.4f} m³)"
                 else:
-                    # Outlier jump (delta < -0.008 or delta > max_delta_m3):
-                    # Reconstruct using trusted integer part from V(t-1) + constrained fractional pointer
-                    prev_int = int(np.floor(prev_val))
-                    prev_frac = prev_val - prev_int
-                    reconstructed = float(prev_int) + raw_frac
-                    if reconstructed < prev_val - 0.015:
-                        reconstructed += 1.0
+                    # Outlier jump: reconstruct using trusted 5-roller part from V(t-1) + constrained 3-pointer fraction
+                    prev_roller = np.floor(prev_val / roller_step + 1e-6) * roller_step
+                    reconstructed = round(float(prev_roller) + ptr_m3, 4)
+                    if reconstructed < prev_val - 0.0015:
+                        reconstructed = round(reconstructed + roller_step, 4)
                     rec_delta = reconstructed - prev_val
                     if 0.0 <= rec_delta <= max_delta_m3:
                         final_val = round(reconstructed, 4)
@@ -1178,14 +1193,15 @@ class MeterStateTracker:
                         flow_lpm = round(0.6 * inst_flow_lpm + 0.4 * prev_flow, 2)
                         f_state = "CARRY_CORRECTED"
                         new_valid_epoch = now_ts
-                        detail = f"Đã lọc nhiễu số cơ bằng V(t-1) (+{rec_delta*liters_per_unit:.1f}L) | Kim: .{dial_digits}"
+                        red_dig = int(np.floor(final_val * 10.0 + 1e-6)) % 10
+                        detail = f"Khớp bánh răng (+{rec_delta*liters_per_unit:.1f}L) | Số đỏ(×0.1): .{red_dig} | 3 Kim: {dial_digits}"
                     else:
                         final_val = round(prev_val, 4)
                         flow_lpm = round(prev_flow * 0.5, 2)
                         f_state = "REJECTED_OUTLIER"
-                        if 0.0 < delta <= 15.0:
+                        if 0.0 < delta <= 2.5:
                             new_pending = round(cand_val, 4)
-                        detail = f"Bác bỏ đọc nhầm ({cand_val:.3f}) -> Bảo toàn {final_val:.4f} m³"
+                        detail = f"Bác bỏ đọc nhầm ({cand_val:.4f}) -> Bảo toàn {final_val:09.4f} m³"
 
             flow_streak = int(st.get("flow_streak", 0))
             if flow_lpm >= 0.08:
@@ -1206,14 +1222,13 @@ class MeterStateTracker:
                 "flow_lpm": flow_lpm,
                 "flow_streak": flow_streak,
                 "leak_alert": leak_alert,
-                "baseline_seed": str(final_val),
+                "baseline_seed": f"{final_val:09.4f}",
                 "filter_state": f_state,
                 "updated_at": now_vn_str()
             }
             self._save()
 
-            n_dec = len(dial_digits) if (dial_digits and dial_digits != "----" and len(dial_digits) in (3, 4)) else 4
-            fmt_str = f"{final_val:08.3f}" if n_dec == 3 else f"{final_val:09.4f}"
+            fmt_str = f"{final_val:09.4f}"
             return {
                 "formatted_value": fmt_str,
                 "detail": detail,
@@ -1249,7 +1264,14 @@ class MeterAnalyticsLedger:
             try:
                 data = json.loads(self.ledger_file.read_text(encoding="utf-8"))
                 if isinstance(data, list):
+                    migrated = False
+                    for p in data:
+                        if isinstance(p, dict) and float(p.get("val", 0.0)) >= 100.0:
+                            p["val"] = round(float(p["val"]) / 10.0, 4)
+                            migrated = True
                     self.points = data
+                    if migrated:
+                        self._save()
             except Exception:
                 self.points = []
 
@@ -1276,6 +1298,8 @@ class MeterAnalyticsLedger:
         val = MeterStateTracker._parse_float(val_str)
         if val is None or val <= 0.0:
             return
+        if val >= 100.0:
+            val = round(val / 10.0, 4)
         clean_ts = self._extract_ts_from_file_or_str(filename, ts_str)
         date_str = clean_ts[:10]
         try:
@@ -1328,7 +1352,7 @@ class MeterAnalyticsLedger:
         month: str = "",
         date_a: str = "",
         date_b: str = "",
-        liters_per_unit: float = 100.0
+        liters_per_unit: float = 1000.0
     ) -> Dict[str, Any]:
         now_dt = datetime.now(TZ_VN)
         today_str = now_dt.strftime("%Y-%m-%d")
@@ -1924,14 +1948,31 @@ def draw_annotations(img_bgr: np.ndarray, analysis: Dict[str, Any]) -> np.ndarra
             cv2.rectangle(roi_sub, (bx, by), (bx + bw, by + bh), (0, 255, 255), 1)
         for bx, by, bw, bh in mb.get("lcd_boxes", []):
             cv2.rectangle(roi_sub, (bx, by), (bx + bw, by + bh), (255, 200, 0), 1)
+        scale_labels = [".01", ".001", ".0001", ".00001"]
         for d in mb.get("dials", []):
             cx, cy = d.get("center", [0, 0])
             tx, ty = d.get("tip", [0, 0])
             rad = int(d.get("radius", 12))
             dig = d.get("digit", "-")
+            idx_d = int(d.get("index", 0))
+            sc_lbl = scale_labels[idx_d] if idx_d < len(scale_labels) else f"D{idx_d+1}"
             cv2.circle(roi_sub, (cx, cy), rad, (0, 215, 255), 2)
             cv2.arrowedLine(roi_sub, (cx, cy), (tx, ty), (0, 255, 0), 2, tipLength=0.28)
-            cv2.putText(roi_sub, f"D{d.get('index',0)+1}:{dig}", (max(2, cx - 22), max(16, cy - rad - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255), 2)
+            cv2.putText(roi_sub, f"x{sc_lbl}:{dig}", (max(2, cx - 28), max(16, cy - rad - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 255, 255), 2)
+
+        # Highlight 4 Black Rollers (x1 m3) + 5th Red Roller (x0.1 m3) window on upright ROI
+        sh_r, sw_r = roi_sub.shape[:2]
+        sv_flt = MeterStateTracker._parse_float(str(mb.get("dial_value", "")))
+        if sv_flt is not None and len(mb.get("dials", [])) >= 2:
+            roller_tenths = int(np.floor(sv_flt * 10.0 + 1e-6))
+            blk_int = roller_tenths // 10
+            red_tenth = roller_tenths % 10
+            bx0, by0, bw0, bh0 = int(sw_r * 0.36), int(sh_r * 0.29), int(sw_r * 0.28), int(sh_r * 0.08)
+            rx0 = bx0 + bw0
+            rw0 = int(sw_r * 0.07)
+            cv2.rectangle(roi_sub, (bx0, by0), (bx0 + bw0, by0 + bh0), (0, 255, 128), 1)
+            cv2.rectangle(roi_sub, (rx0, by0), (rx0 + rw0, by0 + bh0), (80, 80, 255), 2)
+            cv2.putText(roi_sub, f"{blk_int:04d}.{red_tenth}(x0.1)", (max(2, bx0 - 4), max(14, by0 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (120, 255, 120), 1)
 
         sn_box = mb.get("serial_box")
         if sn_box and len(sn_box) == 4:
@@ -2036,23 +2077,31 @@ def process_and_record_image(
             raw_d_str = "".join(str(d.get("digit", "0")) for d in d_list[:3])
             s_flt = MeterStateTracker._parse_float(srv_val_str)
             if s_flt is not None:
-                edg_val_str = f"{int(np.floor(s_flt)):04d}.{raw_d_str}"
+                roller_tenths = int(np.floor(s_flt * 10.0 + 1e-6))
+                edg_val_str = f"{roller_tenths // 10:04d}.{roller_tenths % 10}{raw_d_str}"
         else:
             edg_val_str = srv_val_str
 
     f_srv = MeterStateTracker._parse_float(srv_val_str)
     f_edg = MeterStateTracker._parse_float(edg_val_str)
+    if f_edg is not None and f_edg >= 100.0:
+        f_edg = round(f_edg / 10.0, 4)
+        edg_val_str = f"{f_edg:09.4f}"
     diff_liters = None
     consensus = "SINGLE_MODEL"
     if f_srv is not None and f_edg is not None:
-        # Compare fractional pointer part if integer was not synced yet on Edge
+        # Compare 3-pointer fractional part if 5-roller integer/tenths was not synced yet on Edge
         raw_diff = abs(f_srv - f_edg)
-        if raw_diff >= 0.95:
-            raw_diff = abs((f_srv % 1.0) - (f_edg % 1.0))
-            if raw_diff > 0.5:
-                raw_diff = 1.0 - raw_diff
-            edg_val_str = f"{int(np.floor(f_srv)):04d}.{edg_val_str.split('.')[-1]}" if "." in edg_val_str else edg_val_str
-        diff_liters = round(raw_diff * 100.0, 1)
+        if raw_diff >= 0.095:
+            srv_ptr = round(f_srv - np.floor(f_srv * 10.0 + 1e-6) / 10.0, 4)
+            edg_ptr = round(f_edg - np.floor(f_edg * 10.0 + 1e-6) / 10.0, 4)
+            raw_diff = abs(srv_ptr - edg_ptr)
+            if raw_diff > 0.05:
+                raw_diff = 0.1 - raw_diff
+            roller_tenths = int(np.floor(f_srv * 10.0 + 1e-6))
+            edg_tail = edg_val_str.split(".")[-1][-3:] if "." in edg_val_str else "000"
+            edg_val_str = f"{roller_tenths // 10:04d}.{roller_tenths % 10}{edg_tail}"
+        diff_liters = round(raw_diff * 1000.0, 1)
         if diff_liters <= 2.5:
             consensus = f"KHỚP ĐỒNG THUẬN (Δ={diff_liters} L)"
         elif diff_liters <= 15.0:

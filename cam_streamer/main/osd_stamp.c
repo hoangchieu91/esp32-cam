@@ -585,26 +585,36 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
         }
 
         if (found_dials >= 2) {
-            int int_part = g_cfg.meter_baseline[0] ? atoi(g_cfg.meter_baseline) : 0;
-            double frac_Scale = (found_dials == 3) ? 1000.0 : ((found_dials == 2) ? 100.0 : 10000.0);
-            double raw_frac = atof(dial_digits) / frac_Scale;
-            double cand_val = (double)int_part + raw_frac;
+            double base_v = g_cfg.meter_baseline[0] ? atof(g_cfg.meter_baseline) : 0.0;
+            if (base_v >= 100.0) base_v /= 10.0; // Auto-normalize legacy 10x baseline (e.g. 0374.843 -> 37.4843)
+            int roller_tenths = (int)floor(base_v * 10.0 + 1e-6); // 4 black rollers + 1 red roller (x0.1 m3)
+            double frac_Scale = (found_dials == 3) ? 10000.0 : ((found_dials == 2) ? 1000.0 : 100000.0);
+            double ptr_m3 = atof(dial_digits) / frac_Scale; // 3 red pointers = x0.01, x0.001, x0.0001 m3
             int64_t now_sec = esp_timer_get_time() / 1000000LL;
 
-            if (s_edge_prev_val < 0.0 && g_cfg.meter_baseline[0]) {
-                s_edge_prev_val = atof(g_cfg.meter_baseline);
+            if (s_edge_prev_val < 0.0 && base_v > 0.0) {
+                s_edge_prev_val = base_v;
                 s_edge_prev_ts_sec = now_sec;
             }
+            if (s_edge_prev_val >= 100.0) {
+                s_edge_prev_val /= 10.0;
+            }
+            if (s_edge_prev_val > 0.0) {
+                int prev_tenths = (int)floor(s_edge_prev_val * 10.0 + 1e-6);
+                if (prev_tenths > roller_tenths) roller_tenths = prev_tenths;
+            }
+
+            double cand_val = ((double)roller_tenths / 10.0) + ptr_m3;
 
             if (s_edge_prev_val > 0.0) {
                 double delta = cand_val - s_edge_prev_val;
-                // Automatic integer carry rollover when D1 wraps from .9xx to .0xx
-                if (delta < -0.50 && delta > -0.99) {
-                    int_part += 1;
-                    cand_val = (double)int_part + raw_frac;
+                // Automatic red-roller (+0.1 m3) carry rollover when D1 (x0.01) wraps from .x9xx to .x0xx
+                if (delta < -0.050 && delta > -0.099) {
+                    roller_tenths += 1;
+                    cand_val = ((double)roller_tenths / 10.0) + ptr_m3;
                     delta = cand_val - s_edge_prev_val;
                     snprintf(g_last_edge_ai.edge_filter_state, sizeof(g_last_edge_ai.edge_filter_state), "CARRY_ROLLOVER");
-                } else if (delta >= -0.008 && delta < 0.0) {
+                } else if (delta >= -0.0010 && delta < 0.0) {
                     cand_val = s_edge_prev_val;
                     delta = 0.0;
                     snprintf(g_last_edge_ai.edge_filter_state, sizeof(g_last_edge_ai.edge_filter_state), "CLAMPED_JITTER");
@@ -613,8 +623,8 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
                 }
 
                 int64_t dt_s = (now_sec > s_edge_prev_ts_sec) ? (now_sec - s_edge_prev_ts_sec) : 10;
-                if (delta > 0.0 && delta <= 2.5 && dt_s >= 2) {
-                    g_last_edge_ai.edge_flow_lpm = (float)((delta * 100.0) / ((double)dt_s / 60.0));
+                if (delta > 0.0 && delta <= 0.5 && dt_s >= 2) {
+                    g_last_edge_ai.edge_flow_lpm = (float)((delta * 1000.0) / ((double)dt_s / 60.0));
                 } else {
                     g_last_edge_ai.edge_flow_lpm = 0.0f;
                 }
@@ -626,10 +636,14 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
             s_edge_prev_val = cand_val;
             s_edge_prev_ts_sec = now_sec;
 
-            snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%04d.%s", int_part, dial_digits);
+            int black_m3 = (roller_tenths / 10) % 10000;
+            if (black_m3 < 0) black_m3 = 0;
+            int red_tenth = (roller_tenths % 10);
+            if (red_tenth < 0) red_tenth = 0;
+            snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%04d.%d%.4s", black_m3, red_tenth, dial_digits);
             snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail),
-                     "[Edge-ESP32] Kim .%s (%dD) | SN:%.12s",
-                     dial_digits, found_dials, g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198");
+                     "[Edge-ESP32] Đỏ .%d + Kim .0%.3s | SN:%.8s",
+                     red_tenth, dial_digits, g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198");
         } else if (d_idx > 0) {
             decoded_str[d_idx] = '\0';
             snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%s", decoded_str);

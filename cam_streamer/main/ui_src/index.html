@@ -805,7 +805,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
                 <span id="lbl-next-cap" style="color:#34d399">Chu kỳ: Tắt</span>
               </div>
               <div style="display:flex;gap:6px;margin-top:3px;flex-wrap:wrap">
-                <input type="text" id="inp-meter-base" placeholder="Số gốc VD: 00304.954" style="flex:1;min-width:130px;font-family:monospace">
+                <input type="text" id="inp-meter-base" placeholder="4 số đen . 1 số đỏ + 3 kim (VD: 0037.4843)" style="flex:1;min-width:130px;font-family:monospace">
                 <button class="btn btn-sm btn-primary" onclick="saveMeterBaseline()">📌 Gán Số Gốc</button>
               </div>
               <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
@@ -2907,7 +2907,12 @@ async function updateStatus() {
         if (ai.meter && ai.meter.dial_value !== undefined) {
           const srvVal = ai.meter.dial_value || '----';
           const edgeVal = (d.edge_digits && d.edge_digits !== '----') ? d.edge_digits : (ai.meter.edge_val || srvVal);
-          document.getElementById('rd-dial-val').textContent = srvVal;
+          const fmtBlackRed = (vStr, withUnit) => {
+            if (!vStr || vStr === '----' || !vStr.includes('.')) return vStr + (withUnit ? ' m³' : '');
+            const [blk, red] = vStr.split('.');
+            return `<span style="color:#f8fafc">${blk}</span><span style="color:#ff5555;font-weight:800">.${red}</span>` + (withUnit ? ' <span style="font-size:10px;color:var(--muted)">m³</span>' : '');
+          };
+          document.getElementById('rd-dial-val').innerHTML = fmtBlackRed(srvVal, false);
           document.getElementById('rd-dial-sub').textContent = `[${modelBadgeTxt}] ${ai.meter.dial_detail || ''} (${ai.meter.flow_lpm || 0} L/p)`;
           const dTag = document.getElementById('rd-dial-tag');
           if (dTag) dTag.textContent = isStandaloneEdge ? '⚡ Edge-ESP32' : '🧠.171 + ⚡ESP32';
@@ -2916,8 +2921,8 @@ async function updateStatus() {
           const cmpE = document.getElementById('cmp-edge-val');
           const cmpS = document.getElementById('cmp-srv-val');
           const cmpB = document.getElementById('cmp-consensus-badge');
-          if (cmpE) cmpE.textContent = `${edgeVal} m³`;
-          if (cmpS) cmpS.textContent = isStandaloneEdge ? 'Offline (Dùng ESP32)' : `${srvVal} m³`;
+          if (cmpE) cmpE.innerHTML = fmtBlackRed(edgeVal, true);
+          if (cmpS) cmpS.innerHTML = isStandaloneEdge ? 'Offline (Dùng ESP32)' : fmtBlackRed(srvVal, true);
           if (cmpB) {
             if (isStandaloneEdge) {
               cmpB.className = 'badge info';
@@ -2927,15 +2932,17 @@ async function updateStatus() {
               const fE = parseFloat(edgeVal);
               if (!isNaN(fS) && !isNaN(fE)) {
                 let rawDiff = Math.abs(fS - fE);
-                if (rawDiff >= 0.95) {
-                  rawDiff = Math.abs((fS % 1.0) - (fE % 1.0));
-                  if (rawDiff > 0.5) rawDiff = 1.0 - rawDiff;
+                if (rawDiff >= 0.095) {
+                  const sPtr = fS - Math.floor(fS * 10.0 + 1e-6) / 10.0;
+                  const ePtr = fE - Math.floor(fE * 10.0 + 1e-6) / 10.0;
+                  rawDiff = Math.abs(sPtr - ePtr);
+                  if (rawDiff > 0.05) rawDiff = 0.1 - rawDiff;
                 }
-                const diffL = (rawDiff * 100.0).toFixed(1);
-                if (rawDiff * 100.0 <= 2.5) {
+                const diffL = (rawDiff * 1000.0).toFixed(1);
+                if (rawDiff * 1000.0 <= 2.5) {
                   cmpB.className = 'badge ok';
                   cmpB.textContent = `✅ Khớp đồng thuận (Δ = ${diffL} L)`;
-                } else if (rawDiff * 100.0 <= 15.0) {
+                } else if (rawDiff * 1000.0 <= 15.0) {
                   cmpB.className = 'badge info';
                   cmpB.textContent = `⚖️ Lệch nhẹ kim cuối (Δ = ${diffL} L)`;
                 } else {
