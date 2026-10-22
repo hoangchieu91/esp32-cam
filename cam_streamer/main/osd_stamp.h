@@ -24,7 +24,10 @@ typedef struct {
     uint8_t roi_g;
     uint8_t roi_b;
     char edge_led_state[24]; // e.g., "ON (DO)", "ON (XANH LA)", "OFF"
-    char edge_digits[16];    // On-device Edge AI 7-Segment / LCD digit readout
+    char edge_digits[16];    // On-device Edge AI 7-Segment / LCD / Dial Water Meter readout e.g. "0304.954"
+    char edge_detail[64];    // Standalone Edge AI detail string
+    float edge_flow_lpm;     // On-device estimated flow rate (L/min)
+    char edge_filter_state[24]; // "VALID_MONOTONIC", "CARRY_ROLLOVER", "CLAMPED_JITTER"
 } edge_ai_result_t;
 
 extern edge_ai_result_t g_last_edge_ai;

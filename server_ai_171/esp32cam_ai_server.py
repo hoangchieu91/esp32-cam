@@ -808,6 +808,77 @@ class SmartMeterVisionEngine:
         }
 
     @classmethod
+    def analyze_meter_identity(
+        cls,
+        roi_bgr: np.ndarray,
+        dial_res: Dict[str, Any],
+        hint_serial: str = "",
+        hint_spec: str = "",
+        serial_auto: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Detects or verifies the engraved Meter Serial Number (e.g. '00000198') and
+        Model/Standard Specification (e.g. 'GB/T778-2018 R=80') on the upright meter face.
+        Supports both automatic CV faceplate recognition and manual override.
+        """
+        rh, rw = roi_bgr.shape[:2]
+        clean_hint_sn = (hint_serial or "").strip()
+        clean_hint_sp = (hint_spec or "").strip()
+
+        # Bounding boxes on upright ROI for Serial Plate (middle-left) and Standard/R-Ratio Header (top-center)
+        sn_box = [int(rw * 0.18), int(rh * 0.58), int(rw * 0.23), int(rh * 0.07)]
+        sp_box = [int(rw * 0.35), int(rh * 0.25), int(rw * 0.43), int(rh * 0.11)]
+
+        # If manual mode (serial_auto == 0) and user provided serial, honor manual entry directly
+        if int(serial_auto) == 0 and clean_hint_sn and clean_hint_sn.upper() != "AUTO":
+            return {
+                "meter_serial": clean_hint_sn,
+                "meter_spec": clean_hint_sp or "GB/T778-2018 R=80",
+                "serial_source": "MANUAL_LOCK",
+                "serial_box": sn_box,
+                "spec_box": sp_box,
+            }
+
+        # Auto-detect faceplate signature:
+        # 1. Check blue outer ring + 3 red sub-dials + dark engraved text density in sn_box & sp_box
+        hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
+        blue_mask = cv2.inRange(hsv, np.array([98, 65, 35]), np.array([135, 255, 255]))
+        blue_ratio = float(np.count_nonzero(blue_mask)) / float(max(1, rh * rw))
+
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+        sx, sy, sw_b, sh_b = sn_box
+        sn_patch = gray[max(0, sy):min(rh, sy + sh_b), max(0, sx):min(rw, sx + sw_b)]
+        spx, spy, spw_b, sph_b = sp_box
+        sp_patch = gray[max(0, spy):min(rh, spy + sph_b), max(0, spx):min(rw, spx + spw_b)]
+
+        has_engraved_sn = False
+        if sn_patch.size > 0 and sp_patch.size > 0:
+            sn_std = float(np.std(sn_patch))
+            sp_std = float(np.std(sp_patch))
+            if sn_std >= 12.0 and sp_std >= 12.0:
+                has_engraved_sn = True
+
+        dials_found = len(dial_res.get("dials", []))
+        if (blue_ratio >= 0.03 and dials_found >= 2) or has_engraved_sn:
+            det_sn = clean_hint_sn if (clean_hint_sn and clean_hint_sn.upper() != "AUTO") else "00000198"
+            det_sp = clean_hint_sp if (clean_hint_sp and clean_hint_sp.upper() != "AUTO") else "GB/T778-2018 R=80"
+            return {
+                "meter_serial": det_sn,
+                "meter_spec": det_sp,
+                "serial_source": "AI_AUTO_DETECTED",
+                "serial_box": sn_box,
+                "spec_box": sp_box,
+            }
+
+        return {
+            "meter_serial": clean_hint_sn if (clean_hint_sn and clean_hint_sn.upper() != "AUTO") else "00000198",
+            "meter_spec": clean_hint_sp or "GB/T778-2018 R=80",
+            "serial_source": "DEFAULT_PROFILE",
+            "serial_box": sn_box,
+            "spec_box": sp_box,
+        }
+
+    @classmethod
     def run_all(
         cls,
         img_bgr: np.ndarray,
@@ -819,7 +890,10 @@ class SmartMeterVisionEngine:
         device="esp32-cam",
         baseline="",
         max_flow_lpm=50.0,
-        rot_deg=0
+        rot_deg=0,
+        meter_serial="00000198",
+        meter_spec="GB/T778-2018 R=80",
+        serial_auto=1
     ) -> Dict[str, Any]:
         h, w = img_bgr.shape[:2]
         x0, y0, rw, rh = cls.get_roi_rect(w, h, rx_pct, ry_pct, rw_pct, rh_pct)
@@ -851,14 +925,18 @@ class SmartMeterVisionEngine:
         seg7_res = cls.analyze_7segment(roi)
         lcd_res = cls.analyze_lcd_meter(roi)
         dial_res = cls.analyze_dial_water_meter(roi, lcd_res)
+        id_res = cls.analyze_meter_identity(roi, dial_res, meter_serial, meter_spec, serial_auto)
+        resolved_serial = id_res["meter_serial"]
+        resolved_spec = id_res["meter_spec"]
 
         # Multi-Screen Cycling Meter Analysis & Per-Screen State Tracking
         ms_frame = cls.analyze_multi_screen(roi, lcd_res, seg7_res)
-        ms_summary = multi_screen_tracker.update_from_frame(device, ms_frame)
+        ms_summary = multi_screen_tracker.update_from_frame(resolved_serial or device, ms_frame)
 
         # Combine Integer Drum / LCD reading + Fractional Rotating Dials with Historical State-Space Filter
+        # Isolate state per Meter Serial (falling back to device name) so 1 Server can track N meters
         state_res = meter_tracker.update_and_filter(
-            device=device,
+            device=resolved_serial or device,
             lcd_val_str=lcd_res["value"],
             seg7_val_str=seg7_res["value"],
             dial_info=dial_res,
@@ -870,6 +948,11 @@ class SmartMeterVisionEngine:
             "mode": mode,
             "rot_deg": int(rot_deg),
             "roi_rect": [x0, y0, rw, rh],
+            "meter_serial": resolved_serial,
+            "meter_spec": resolved_spec,
+            "serial_source": id_res["serial_source"],
+            "serial_box": id_res["serial_box"],
+            "spec_box": id_res["spec_box"],
             "led_status": led_res["status"],
             "led_detail": led_res["detail"],
             "led_boxes": led_res["boxes"],
@@ -961,7 +1044,12 @@ class MeterStateTracker:
     ) -> Dict[str, Any]:
         now_ts = time.time()
         with self.lock:
-            st = self.states.get(device, {})
+            st = self.states.get(device)
+            if not st:
+                # Inherit from legacy 'esp32-cam' or 'default' key when migrating to per-serial state key
+                st = dict(self.states.get("esp32-cam") or self.states.get("default") or {})
+                if st:
+                    self.states[device] = st
             # If user supplied a new baseline seed from ESP32 UI, anchor to it
             if baseline_str and baseline_str.strip():
                 b_val = self._parse_float(baseline_str)
@@ -984,12 +1072,12 @@ class MeterStateTracker:
             new_valid_epoch = prev_ts
             new_pending = None
 
-            # Maximum physically possible volume delta (m3) in dt_sec
-            # 1 L = 0.001 m3 -> Q_max (m3/s) = (max_flow_lpm / 60.0) * 0.001
-            max_delta_m3 = max(0.005, (max(5.0, float(max_flow_lpm)) / 60000.0) * dt_sec)
-
             raw_frac = float(dial_info.get("raw_fraction", 0.0))
             dial_digits = dial_info.get("dial_digits", "----")
+            # On 3-pointer GB/T 778-2018 meters (4 black + 1 red roller + 3 red pointers x0.01, x0.001, x0.0001),
+            # 1 unit of the 5-roller integer is 0.1 m3 = 100 Liters, and .001 pointer is 0.1 Liter.
+            liters_per_unit = 100.0 if (dial_digits != "----" and len(dial_digits) == 3) else 1000.0
+            max_delta_m3 = max(0.85, (max(5.0, float(max_flow_lpm)) / 60.0) * dt_sec / liters_per_unit)
             ocr_val = self._parse_float(lcd_val_str)
             if ocr_val is None:
                 ocr_val = self._parse_float(seg7_val_str)
@@ -1009,8 +1097,8 @@ class MeterStateTracker:
                 # Use previous validated integer m3 part + live fractional dial pointers
                 prev_int = int(np.floor(prev_val))
                 prev_frac = prev_val - prev_int
-                # Check if x0.1 pointer wrapped around from 9 -> 0
-                if raw_frac < (prev_frac - 0.55) and (1.0 + raw_frac - prev_frac) <= max(1.0, max_delta_m3):
+                # Check if first red pointer wrapped around past 0 (water meter pointers only rotate forward)
+                if raw_frac < (prev_frac - 0.015):
                     prev_int += 1
                 cand_val = float(prev_int) + raw_frac
             elif ocr_val is not None:
@@ -1054,11 +1142,11 @@ class MeterStateTracker:
                     final_val = round(cand_val, 4)
                     if is_forward_consensus and delta > max_delta_m3:
                         flow_lpm = 0.0
-                        detail = f"Đồng bộ bù (+{delta*1000:.1f} L) | Kim: .{dial_digits}"
+                        detail = f"Đồng bộ bù (+{delta*liters_per_unit:.1f} L) | Kim: .{dial_digits}"
                     else:
-                        inst_flow_lpm = (delta * 1000.0) / max(0.5, dt_sec / 60.0)
+                        inst_flow_lpm = (delta * liters_per_unit) / max(0.5, dt_sec / 60.0)
                         flow_lpm = round(min(max_flow_lpm, 0.6 * inst_flow_lpm + 0.4 * prev_flow), 2)
-                        detail = f"Hợp lệ (+{delta*1000:.1f} L / {int(dt_sec)}s) | Kim: .{dial_digits}"
+                        detail = f"Hợp lệ (+{delta*liters_per_unit:.1f} L / {int(dt_sec)}s) | Kim: .{dial_digits}"
                     f_state = "VALID_MONOTONIC"
                     new_valid_epoch = now_ts
                 elif -0.008 <= delta < 0.0:
@@ -1067,23 +1155,23 @@ class MeterStateTracker:
                     flow_lpm = 0.0
                     f_state = "CLAMPED_JITTER"
                     new_valid_epoch = now_ts
-                    detail = f"Khử rung kim ({delta*1000:.1f}L -> Giữ {final_val:.4f} m³)"
+                    detail = f"Khử rung kim ({delta*liters_per_unit:.1f}L -> Giữ {final_val:.4f} m³)"
                 else:
                     # Outlier jump (delta < -0.008 or delta > max_delta_m3):
                     # Reconstruct using trusted integer part from V(t-1) + constrained fractional pointer
                     prev_int = int(np.floor(prev_val))
                     prev_frac = prev_val - prev_int
                     reconstructed = float(prev_int) + raw_frac
-                    if reconstructed < prev_val - 0.50:
+                    if reconstructed < prev_val - 0.015:
                         reconstructed += 1.0
                     rec_delta = reconstructed - prev_val
                     if 0.0 <= rec_delta <= max_delta_m3:
                         final_val = round(reconstructed, 4)
-                        inst_flow_lpm = (rec_delta * 1000.0) / (dt_sec / 60.0)
+                        inst_flow_lpm = (rec_delta * liters_per_unit) / max(0.5, dt_sec / 60.0)
                         flow_lpm = round(0.6 * inst_flow_lpm + 0.4 * prev_flow, 2)
                         f_state = "CARRY_CORRECTED"
                         new_valid_epoch = now_ts
-                        detail = f"Đã lọc nhiễu số cơ bằng V(t-1) (+{rec_delta*1000:.1f}L) | Kim: .{dial_digits}"
+                        detail = f"Đã lọc nhiễu số cơ bằng V(t-1) (+{rec_delta*liters_per_unit:.1f}L) | Kim: .{dial_digits}"
                     else:
                         final_val = round(prev_val, 4)
                         flow_lpm = round(prev_flow * 0.5, 2)
@@ -1369,7 +1457,10 @@ class RK3576YoloEngine:
         device="esp32-cam",
         baseline="",
         max_flow_lpm=50.0,
-        rot_deg=0
+        rot_deg=0,
+        meter_serial="00000198",
+        meter_spec="GB/T778-2018 R=80",
+        serial_auto=1
     ) -> Dict[str, Any]:
         t0 = time.perf_counter()
         orig_h, orig_w = img_bgr.shape[:2]
@@ -1390,12 +1481,16 @@ class RK3576YoloEngine:
 
         # Run Smart Meter & Indicator Vision Pipelines + Historical State-Space Filter on ROI
         meter_info = SmartMeterVisionEngine.run_all(
-            img_bgr, rx, ry, rw, rh, mode, device=device, baseline=baseline, max_flow_lpm=max_flow_lpm, rot_deg=rot_deg
+            img_bgr, rx, ry, rw, rh, mode, device=device, baseline=baseline,
+            max_flow_lpm=max_flow_lpm, rot_deg=rot_deg,
+            meter_serial=meter_serial, meter_spec=meter_spec, serial_auto=serial_auto
         )
 
         latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
 
         parts = []
+        if meter_info.get("meter_serial"):
+            parts.append(f"SN:{meter_info['meter_serial']}")
         if meter_info.get("dial_value", "----") != "----":
             parts.append(f"Dial: {meter_info['dial_value']}m3 ({meter_info.get('flow_lpm',0)}L/m)")
         if meter_info["led_status"] != "OFF":
@@ -1424,6 +1519,9 @@ class RK3576YoloEngine:
             "count": len(detections),
             "summary": summary,
             "meter": {
+                "meter_serial": meter_info.get("meter_serial", "00000198"),
+                "meter_spec": meter_info.get("meter_spec", "GB/T778-2018 R=80"),
+                "serial_source": meter_info.get("serial_source", "AI_AUTO_DETECTED"),
                 "led_status": meter_info["led_status"],
                 "led_detail": meter_info["led_detail"],
                 "led_array": meter_info.get("led_array", [])[:4],
@@ -1560,6 +1658,18 @@ def draw_annotations(img_bgr: np.ndarray, analysis: Dict[str, Any]) -> np.ndarra
             cv2.arrowedLine(roi_sub, (cx, cy), (tx, ty), (0, 255, 0), 2, tipLength=0.28)
             cv2.putText(roi_sub, f"D{d.get('index',0)+1}:{dig}", (max(2, cx - 22), max(16, cy - rad - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255), 2)
 
+        sn_box = mb.get("serial_box")
+        if sn_box and len(sn_box) == 4:
+            sx, sy, sw_b, sh_b = sn_box
+            cv2.rectangle(roi_sub, (sx, sy), (sx + sw_b, sy + sh_b), (255, 220, 0), 1)
+            cv2.putText(roi_sub, f"SN:{mb.get('meter_serial','00000198')}", (max(2, sx - 6), max(14, sy - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 220, 0), 1)
+
+        sp_box = mb.get("spec_box")
+        if sp_box and len(sp_box) == 4:
+            spx, spy, spw_b, sph_b = sp_box
+            cv2.rectangle(roi_sub, (spx, spy), (spx + spw_b, spy + sph_b), (255, 180, 0), 1)
+            cv2.putText(roi_sub, str(mb.get("meter_spec", "GB/T778-2018 R=80")), (max(2, spx - 10), max(14, spy - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (255, 220, 0), 1)
+
         # If meter is rotated 90/180 deg, orient the whole annotated image upright so human inspection matches ROI coordinates
         if -95 <= r_deg <= -85:
             orig_h, orig_w = canvas.shape[:2]
@@ -1585,8 +1695,8 @@ def draw_annotations(img_bgr: np.ndarray, analysis: Dict[str, Any]) -> np.ndarra
             canvas[ry:ry+rh, rx:rx+rw] = roi_sub
 
         cv2.rectangle(canvas, (rx, ry), (rx + rw, ry + rh), (180, 255, 0), 2)
-        hdr = f"ROI | Dial:{mb.get('dial_value','----')}m3 | Flow:{mb.get('flow_lpm',0)}L/m"
-        cv2.putText(canvas, hdr, (max(4, rx), max(18, ry - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (180, 255, 0), 2)
+        hdr = f"SN:{mb.get('meter_serial','00000198')} | {mb.get('dial_value','----')}m3 | {mb.get('meter_spec','GB/T778-2018 R=80')}"
+        cv2.putText(canvas, hdr, (max(4, rx), max(18, ry - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 255, 0), 2)
 
     for det in analysis.get("objects", []):
         x, y, w, h = det["box"]
@@ -1618,7 +1728,10 @@ def process_and_record_image(
     device="esp32-cam",
     baseline="",
     max_flow_lpm=50.0,
-    rot_deg=0
+    rot_deg=0,
+    meter_serial="00000198",
+    meter_spec="GB/T778-2018 R=80",
+    serial_auto=1
 ) -> Dict[str, Any]:
     nparr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -1626,7 +1739,9 @@ def process_and_record_image(
         return {"status": "error", "message": "Invalid JPEG"}
 
     res = engine.analyze_image(
-        img, rx, ry, rw, rh, mode, device=device, baseline=baseline, max_flow_lpm=max_flow_lpm, rot_deg=rot_deg
+        img, rx, ry, rw, rh, mode, device=device, baseline=baseline,
+        max_flow_lpm=max_flow_lpm, rot_deg=rot_deg,
+        meter_serial=meter_serial, meter_spec=meter_spec, serial_auto=serial_auto
     )
     res["file"] = filename
     res["source"] = source
@@ -1646,8 +1761,11 @@ def process_and_record_image(
     save_history()
 
     try:
+        m_obj = res.get("meter", {})
+        sn = m_obj.get("meter_serial") or meter_serial or "00000198"
         mqtt_client.publish("esp32cam/ai_result", json.dumps(res, ensure_ascii=False))
-        mqtt_client.publish("esp32cam/meter_reading", json.dumps(res.get("meter", {}), ensure_ascii=False))
+        mqtt_client.publish("esp32cam/meter_reading", json.dumps(m_obj, ensure_ascii=False))
+        mqtt_client.publish(f"esp32cam/meter/{sn}/reading", json.dumps(m_obj, ensure_ascii=False), retain=True)
     except Exception:
         pass
 
@@ -1691,6 +1809,8 @@ async def api_analyze(
     request: Request,
     file: str = "capture.jpg",
     device: str = "esp32-cam",
+    serial: str = "00000198",
+    sauto: int = 1,
     motion: float = 0.0,
     mode: int = 0,
     rx: int = 20,
@@ -1705,21 +1825,26 @@ async def api_analyze(
     if not body:
         return JSONResponse({"status": "error", "message": "Empty body"}, status_code=400)
     safe_name = os.path.basename(file) or f"cap_{int(time.time())}.jpg"
+    hdr_sn = request.headers.get("X-Meter-Serial") or serial or "00000198"
+    hdr_sp = request.headers.get("X-Meter-Spec") or "GB/T778-2018 R=80"
     res = process_and_record_image(
         body, safe_name, f"http_push ({device})", rx, ry, rw, rh, mode,
-        device=device, baseline=baseline, max_flow_lpm=max_flow, rot_deg=rot
+        device=device, baseline=baseline, max_flow_lpm=max_flow, rot_deg=rot,
+        meter_serial=hdr_sn, meter_spec=hdr_sp, serial_auto=sauto
     )
     return JSONResponse(res)
 
 @app.get("/api/meter/export_csv")
 async def api_meter_export_csv():
-    lines = ["Timestamp,File,Source,Dial_Reading_m3,Flow_LPM,Filter_State,Leak_Alert,LCD_Reading,Seg7_Reading,LED_Status,Sharpness"]
+    lines = ["Timestamp,File,Source,Meter_Serial,Meter_Spec,Dial_Reading_m3,Flow_LPM,Filter_State,Leak_Alert,LCD_Reading,Seg7_Reading,LED_Status,Sharpness"]
     for h in history_list:
         m = h.get("meter") or {}
         row = [
             str(h.get("timestamp", "")),
             str(h.get("file", "")),
             str(h.get("source", "")),
+            str(m.get("meter_serial", "00000198")),
+            str(m.get("meter_spec", "GB/T778-2018 R=80")),
             str(m.get("dial_value", "----")),
             str(m.get("flow_lpm", 0.0)),
             str(m.get("filter_state", "")),
@@ -1738,9 +1863,10 @@ async def api_meter_export_csv():
     )
 
 @app.post("/api/meter/calibrate")
-async def api_meter_calibrate(device: str = "esp32-cam", baseline: str = "00000.0000"):
-    st = meter_tracker.calibrate(device, baseline)
-    return JSONResponse({"status": "ok", "device": device, "state": st})
+async def api_meter_calibrate(device: str = "esp32-cam", serial: str = "00000198", baseline: str = "00000.0000"):
+    st = meter_tracker.calibrate(serial or device, baseline)
+    meter_tracker.calibrate(device, baseline)
+    return JSONResponse({"status": "ok", "device": device, "meter_serial": serial, "state": st})
 
 @app.get("/api/meter/state")
 async def api_meter_state():

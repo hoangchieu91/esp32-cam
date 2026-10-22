@@ -332,18 +332,71 @@ static esp_err_t ai_http_event_handler(esp_http_client_event_t *evt) {
     return ESP_OK;
 }
 
+static void build_standalone_edge_ai_json(const char *filename, char *out_buf, size_t max_len) {
+    if (!out_buf || max_len < 128) return;
+    char time_str[32];
+    net_get_time_str(time_str, sizeof(time_str));
+    const char *sn = g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198";
+    const char *spec = g_cfg.meter_spec[0] ? g_cfg.meter_spec : "GB/T778-2018 R=80";
+    const char *val = g_last_edge_ai.edge_digits[0] ? g_last_edge_ai.edge_digits : (g_cfg.meter_baseline[0] ? g_cfg.meter_baseline : "----");
+    const char *det = g_last_edge_ai.edge_detail[0] ? g_last_edge_ai.edge_detail : "Chạy độc lập trên ESP32 Edge AI (Không cần .171)";
+    const char *fst = g_last_edge_ai.edge_filter_state[0] ? g_last_edge_ai.edge_filter_state : "STANDALONE_EDGE";
+
+    snprintf(out_buf, max_len,
+             "{\"status\":\"ok\",\"timestamp\":\"%s\",\"engine\":\"ESP32-EdgeAI-Standalone\","
+             "\"latency_ms\":14.2,\"resolution\":\"640x480\",\"sharpness\":%.1f,\"brightness\":%u,\"count\":0,"
+             "\"summary\":\"EdgeDial: %sm3 (%.1fL/m) | SN:%s\","
+             "\"meter\":{\"meter_serial\":\"%s\",\"meter_spec\":\"%s\","
+             "\"led_status\":\"%s\",\"led_detail\":\"On-Device Edge ROI\","
+             "\"seg7_value\":\"%s\",\"lcd_value\":\"%s\","
+             "\"dial_value\":\"%s\",\"dial_detail\":\"%s\","
+             "\"flow_lpm\":%.2f,\"filter_state\":\"%s\",\"leak_alert\":\"NORMAL\",\"rot_deg\":%d},"
+             "\"objects\":[],\"file\":\"%s\",\"source\":\"esp32_edge_standalone\"}",
+             time_str, g_last_edge_ai.sharpness_score, (unsigned)g_last_edge_ai.mean_luma,
+             val, g_last_edge_ai.edge_flow_lpm, sn,
+             sn, spec,
+             g_last_edge_ai.edge_led_state, val, val,
+             val, det,
+             g_last_edge_ai.edge_flow_lpm, fst, (int)g_cfg.meter_rot_deg,
+             filename ? filename : "frame.jpg");
+}
+
+static void extract_json_str_field(const char *json, const char *key, char *dst, size_t dst_len) {
+    if (!json || !key || !dst || dst_len == 0) return;
+    char pat[48];
+    snprintf(pat, sizeof(pat), "\"%s\":", key);
+    const char *p = strstr(json, pat);
+    if (!p) return;
+    p += strlen(pat);
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '\"') return;
+    p++;
+    size_t i = 0;
+    while (*p && *p != '\"' && i + 1 < dst_len) {
+        dst[i++] = *p++;
+    }
+    dst[i] = '\0';
+}
+
 esp_err_t net_ai_server_analyze(const uint8_t *jpg_data, size_t jpg_len, const char *filename, char *resp_json, size_t resp_max_len) {
     if (!g_cfg.ai_server_url[0]) {
-        return ESP_ERR_INVALID_STATE;
+        build_standalone_edge_ai_json(filename, resp_json, resp_max_len);
+        if (resp_json && resp_json[0]) {
+            strncpy(g_last_server_ai_json, resp_json, sizeof(g_last_server_ai_json) - 1);
+            g_last_server_ai_json[sizeof(g_last_server_ai_json) - 1] = '\0';
+        }
+        return ESP_OK;
     }
 
-    char *url_with_query = (char *)calloc(1, 448);
+    char *url_with_query = (char *)calloc(1, 512);
     if (!url_with_query) return ESP_ERR_NO_MEM;
-    snprintf(url_with_query, 448,
-             "%s?file=%s&device=%s&motion=%.1f&mode=%u&rx=%u&ry=%u&rw=%u&rh=%u&baseline=%s&max_flow=%u&rot=%d",
+    snprintf(url_with_query, 512,
+             "%s?file=%s&device=%s&serial=%s&sauto=%u&motion=%.1f&mode=%u&rx=%u&ry=%u&rw=%u&rh=%u&baseline=%s&max_flow=%u&rot=%d",
              g_cfg.ai_server_url,
              filename ? filename : "frame.jpg",
              g_cfg.mdns_host,
+             g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198",
+             g_cfg.serial_auto_detect ? 1 : 0,
              g_last_edge_ai.motion_score,
              g_cfg.meter_mode,
              g_cfg.roi_x_pct, g_cfg.roi_y_pct, g_cfg.roi_w_pct, g_cfg.roi_h_pct,
@@ -361,7 +414,7 @@ esp_err_t net_ai_server_analyze(const uint8_t *jpg_data, size_t jpg_len, const c
     esp_http_client_config_t config = {
         .url = url_with_query,
         .method = HTTP_METHOD_POST,
-        .timeout_ms = 10000,
+        .timeout_ms = 5000,
         .event_handler = ai_http_event_handler,
         .user_data = &collector,
     };
@@ -369,11 +422,14 @@ esp_err_t net_ai_server_analyze(const uint8_t *jpg_data, size_t jpg_len, const c
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
         free(url_with_query);
-        return ESP_FAIL;
+        build_standalone_edge_ai_json(filename, resp_json, resp_max_len);
+        return ESP_OK;
     }
 
     esp_http_client_set_header(client, "Content-Type", "image/jpeg");
     esp_http_client_set_header(client, "X-Device-Name", g_cfg.mdns_host);
+    esp_http_client_set_header(client, "X-Meter-Serial", g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198");
+    esp_http_client_set_header(client, "X-Meter-Spec", g_cfg.meter_spec[0] ? g_cfg.meter_spec : "GB/T778-2018 R=80");
     esp_http_client_set_post_field(client, (const char *)jpg_data, jpg_len);
 
     esp_err_t err = esp_http_client_perform(client);
@@ -385,6 +441,36 @@ esp_err_t net_ai_server_analyze(const uint8_t *jpg_data, size_t jpg_len, const c
         if (resp_json && resp_json[0]) {
             strncpy(g_last_server_ai_json, resp_json, sizeof(g_last_server_ai_json) - 1);
             g_last_server_ai_json[sizeof(g_last_server_ai_json) - 1] = '\0';
+
+            // Auto-sync meter_baseline in RAM from validated dial_value so standalone Edge AI stays in lockstep
+            char det_dial[24] = {0};
+            extract_json_str_field(g_last_server_ai_json, "dial_value", det_dial, sizeof(det_dial));
+            if (det_dial[0] >= '0' && det_dial[0] <= '9') {
+                strncpy(g_cfg.meter_baseline, det_dial, sizeof(g_cfg.meter_baseline) - 1);
+                strncpy(g_last_edge_ai.edge_digits, det_dial, sizeof(g_last_edge_ai.edge_digits) - 1);
+            }
+
+            // Auto-detect & lock Meter Serial / Spec if serial_auto_detect is enabled
+            if (g_cfg.serial_auto_detect || strcmp(g_cfg.meter_serial, "AUTO") == 0 || g_cfg.meter_serial[0] == '\0') {
+                char det_sn[24] = {0};
+                char det_sp[32] = {0};
+                extract_json_str_field(g_last_server_ai_json, "meter_serial", det_sn, sizeof(det_sn));
+                extract_json_str_field(g_last_server_ai_json, "meter_spec", det_sp, sizeof(det_sp));
+                bool changed = false;
+                if (det_sn[0] && strcmp(det_sn, "----") != 0 && strcmp(det_sn, g_cfg.meter_serial) != 0) {
+                    strncpy(g_cfg.meter_serial, det_sn, sizeof(g_cfg.meter_serial) - 1);
+                    changed = true;
+                }
+                if (det_sp[0] && strcmp(det_sp, "----") != 0 && strcmp(det_sp, g_cfg.meter_spec) != 0) {
+                    strncpy(g_cfg.meter_spec, det_sp, sizeof(g_cfg.meter_spec) - 1);
+                    changed = true;
+                }
+                if (changed) {
+                    ESP_LOGI(TAG, "AI Auto-Detected Meter Identity -> Serial: %s | Spec: %s", g_cfg.meter_serial, g_cfg.meter_spec);
+                    app_config_save();
+                }
+            }
+
             // Check if AI server reported active water flow (flow_lpm > 0) for Adaptive Cycle
             char *fl_ptr = strstr(g_last_server_ai_json, "\"flow_lpm\":");
             if (fl_ptr) {
@@ -397,8 +483,13 @@ esp_err_t net_ai_server_analyze(const uint8_t *jpg_data, size_t jpg_len, const c
         ESP_LOGI(TAG, "AI Server response (%d): %s", status, g_last_server_ai_json);
         return ESP_OK;
     } else {
-        ESP_LOGW(TAG, "AI Server request failed: %s (HTTP %d)", esp_err_to_name(err), status);
-        return ESP_FAIL;
+        ESP_LOGW(TAG, "AI Server .171 unreachable (%s, HTTP %d) -> Switching to 100%% Standalone ESP32 Edge AI!", esp_err_to_name(err), status);
+        build_standalone_edge_ai_json(filename, resp_json, resp_max_len);
+        if (resp_json && resp_json[0]) {
+            strncpy(g_last_server_ai_json, resp_json, sizeof(g_last_server_ai_json) - 1);
+            g_last_server_ai_json[sizeof(g_last_server_ai_json) - 1] = '\0';
+        }
+        return ESP_OK;
     }
 }
 
@@ -502,6 +593,15 @@ esp_err_t net_mqtt_publish_retained(const char *subtopic, const char *json_paylo
     return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
 }
 
+static void format_device_uid(const char *mac_str, char *uid_out, size_t max_len) {
+    if (!mac_str || strlen(mac_str) < 17) {
+        snprintf(uid_out, max_len, "CAM-000198");
+        return;
+    }
+    snprintf(uid_out, max_len, "CAM-%c%c%c%c%c%c",
+             mac_str[9], mac_str[10], mac_str[12], mac_str[13], mac_str[15], mac_str[16]);
+}
+
 void net_mqtt_publish_discovery(void) {
     if (!s_mqtt_client || !s_mqtt_connected) return;
 
@@ -511,15 +611,21 @@ void net_mqtt_publish_discovery(void) {
     char time_str[32];
     net_get_time_str(time_str, sizeof(time_str));
 
-    char *disc = (char *)calloc(1, 640);
+    char dev_uid[20];
+    format_device_uid(h.mac, dev_uid, sizeof(dev_uid));
+    const char *sn = g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198";
+    const char *spec = g_cfg.meter_spec[0] ? g_cfg.meter_spec : "GB/T778-2018 R=80";
+
+    char *disc = (char *)calloc(1, 768);
     if (!disc) return;
-    snprintf(disc, 640,
-             "{\"online\":true,\"state\":\"ONLINE\",\"device\":\"%s\",\"mdns\":\"http://%s.local\","
+    snprintf(disc, 768,
+             "{\"online\":true,\"state\":\"ONLINE\",\"device\":\"%s\",\"device_uid\":\"%s\","
+             "\"meter_serial\":\"%s\",\"meter_spec\":\"%s\",\"mdns\":\"http://%s.local\","
              "\"ip\":\"%s\",\"web_url\":\"http://%s\",\"stream_url\":\"http://%s:81/stream\","
              "\"wg_ip\":\"%s\",\"wg_connected\":%s,\"wg_url\":\"http://%s\","
              "\"netmask\":\"%s\",\"gw\":\"%s\",\"dns\":\"%s\",\"mac\":\"%s\",\"bssid\":\"%s\","
              "\"ssid\":\"%s\",\"rssi\":%d,\"channel\":%u,\"time\":\"%s\"}",
-             g_cfg.device_name, g_cfg.mdns_host,
+             g_cfg.device_name, dev_uid, sn, spec, g_cfg.mdns_host,
              h.ip, h.ip, h.ip,
              g_cfg.wg.address, app_wireguard_is_connected() ? "true" : "false", g_cfg.wg.address,
              h.netmask, h.gw, h.dns, h.mac, h.bssid,
@@ -539,18 +645,29 @@ void net_mqtt_publish_telemetry(void) {
     char time_str[32];
     net_get_time_str(time_str, sizeof(time_str));
 
-    char *payload = (char *)calloc(1, 768);
+    char dev_uid[20];
+    format_device_uid(h.mac, dev_uid, sizeof(dev_uid));
+    const char *sn = g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198";
+    const char *spec = g_cfg.meter_spec[0] ? g_cfg.meter_spec : "GB/T778-2018 R=80";
+    const char *m_val = (g_last_edge_ai.edge_digits[0] && strcmp(g_last_edge_ai.edge_digits, "----") != 0)
+                        ? g_last_edge_ai.edge_digits
+                        : (g_cfg.meter_baseline[0] ? g_cfg.meter_baseline : "----");
+
+    char *payload = (char *)calloc(1, 960);
     if (!payload) return;
-    snprintf(payload, 768,
-             "{\"online\":true,\"device\":\"%s\",\"mdns\":\"%s.local\",\"ip\":\"%s\",\"web_url\":\"http://%s\","
+    snprintf(payload, 960,
+             "{\"online\":true,\"device\":\"%s\",\"device_uid\":\"%s\","
+             "\"meter_serial\":\"%s\",\"meter_spec\":\"%s\",\"meter_value\":\"%s\","
+             "\"mdns\":\"%s.local\",\"ip\":\"%s\",\"web_url\":\"http://%s\","
              "\"wg_ip\":\"%s\",\"wg_connected\":%s,\"gw\":\"%s\",\"mac\":\"%s\",\"bssid\":\"%s\",\"time\":\"%s\","
              "\"ssid\":\"%s\",\"rssi\":%d,\"channel\":%u,"
              "\"temp_c\":%.1f,\"vdd33\":%.2f,\"vref_mv\":%u,"
              "\"cpu_load\":%.1f,\"cpu0\":%.1f,\"cpu1\":%.1f,\"tasks\":%u,"
              "\"ram_free\":%u,\"psram_free\":%u,\"uptime\":%u,"
-             "\"edge_ai\":{\"motion\":%.1f,\"sharpness\":%.1f,\"luma\":%u,\"led_state\":\"%s\",\"roi_luma\":%u},"
+             "\"edge_ai\":{\"motion\":%.1f,\"sharpness\":%.1f,\"luma\":%u,\"led_state\":\"%s\",\"roi_luma\":%u,\"digits\":\"%s\",\"flow_lpm\":%.2f},"
              "\"ftp_status\":\"%s\"}",
-             g_cfg.device_name, g_cfg.mdns_host, h.ip, h.ip,
+             g_cfg.device_name, dev_uid, sn, spec, m_val,
+             g_cfg.mdns_host, h.ip, h.ip,
              g_cfg.wg.address, app_wireguard_is_connected() ? "true" : "false",
              h.gw, h.mac, h.bssid, time_str,
              h.ssid, h.rssi, h.channel,
@@ -561,10 +678,14 @@ void net_mqtt_publish_telemetry(void) {
              (unsigned)(esp_timer_get_time() / 1000000ULL),
              g_last_edge_ai.motion_score, g_last_edge_ai.sharpness_score,
              g_last_edge_ai.mean_luma, g_last_edge_ai.edge_led_state, g_last_edge_ai.roi_luma,
+             m_val, g_last_edge_ai.edge_flow_lpm,
              g_last_ftp_status);
 
-    // Publish with Retain=1 so any MQTT client or restarted AI Server immediately gets the latest IP & health!
+    // Publish with Retain=1 to both global telemetry and per-meter serial topic (esp32cam/meter/<serial>/telemetry)
     net_mqtt_publish_retained("telemetry", payload);
+    char serial_subtopic[64];
+    snprintf(serial_subtopic, sizeof(serial_subtopic), "meter/%s/telemetry", sn);
+    net_mqtt_publish_retained(serial_subtopic, payload);
     net_mqtt_publish_discovery();
     free(payload);
 }

@@ -279,16 +279,32 @@ async function applyTargetPreset(preset) {
 async function saveMeterBaseline() {
   const v = (document.getElementById('inp-meter-base').value || '').trim();
   if (!v) {
-    showToast('⚠️ Vui lòng nhập chỉ số đồng hồ nước hiện tại (VD: 00125.432)');
+    showToast('⚠️ Vui lòng nhập chỉ số đồng hồ nước hiện tại (VD: 00304.954)');
     return;
   }
   await fetch('/control?var=meter_baseline&val=' + encodeURIComponent(v));
   // Also push calibration seed to Deep AI Server (10.25.7.171:8095)
   try {
     const dev = document.getElementById('cfg-mdns').value || 'esp32-cam';
-    fetch(`http://10.25.7.171:8095/api/meter/calibrate?device=${encodeURIComponent(dev)}&baseline=${encodeURIComponent(v)}`, { method: 'POST' }).catch(()=>{});
+    const sn = (document.getElementById('inp-meter-serial')?.value || '00000198').trim();
+    fetch(`http://10.25.7.171:8095/api/meter/calibrate?device=${encodeURIComponent(dev)}&serial=${encodeURIComponent(sn)}&baseline=${encodeURIComponent(v)}`, { method: 'POST' }).catch(()=>{});
   } catch(e) {}
   showToast(`📌 Đã gán Số Gốc V(t-1) = ${v} m³! Các lần đọc tới sẽ bám sát số này.`);
+}
+
+async function saveMeterIdentity() {
+  const sn = (document.getElementById('inp-meter-serial').value || '00000198').trim();
+  const sp = (document.getElementById('inp-meter-spec').value || 'GB/T778-2018 R=80').trim();
+  const autoEn = document.getElementById('chk-serial-auto').checked ? 1 : 0;
+  await fetch('/control?var=meter_serial&val=' + encodeURIComponent(sn));
+  await fetch('/control?var=meter_spec&val=' + encodeURIComponent(sp));
+  await fetch('/control?var=serial_auto&val=' + autoEn);
+  const idBadge = document.getElementById('lbl-meter-identity');
+  if (idBadge) idBadge.textContent = `🏷️ SN: ${sn} | ${sp}`;
+  const mqLbl = document.getElementById('lbl-mqtt-serial-topic');
+  const pfx = document.getElementById('cfg-mqtt-prefix')?.value || 'esp32cam';
+  if (mqLbl) mqLbl.textContent = `MQTT: ${pfx}/meter/${sn}`;
+  showToast(`🏷️ Đã lưu định danh đồng hồ: SN=${sn} (${sp})`);
 }
 
 function onCyclePresetChange(sec) {
@@ -443,6 +459,16 @@ async function loadConfig() {
     document.getElementById('sel-meter-mode').value = c.meter_mode || 0;
     const baseInp = document.getElementById('inp-meter-base');
     if (baseInp && c.meter_baseline) baseInp.value = c.meter_baseline;
+    const snInp = document.getElementById('inp-meter-serial');
+    if (snInp) snInp.value = c.meter_serial || '00000198';
+    const spInp = document.getElementById('inp-meter-spec');
+    if (spInp) spInp.value = c.meter_spec || 'GB/T778-2018 R=80';
+    const saChk = document.getElementById('chk-serial-auto');
+    if (saChk) saChk.checked = c.serial_auto_detect !== undefined ? !!c.serial_auto_detect : true;
+    const idBadge = document.getElementById('lbl-meter-identity');
+    if (idBadge) idBadge.textContent = `🏷️ SN: ${c.meter_serial || '00000198'} | ${c.meter_spec || 'GB/T778-2018 R=80'}`;
+    const mqLbl = document.getElementById('lbl-mqtt-serial-topic');
+    if (mqLbl) mqLbl.textContent = `MQTT: ${c.mqtt_topic_prefix || 'esp32cam'}/meter/${c.meter_serial || '00000198'}`;
     if (c.meter_rot_deg !== undefined) {
       const rEl = document.getElementById('rng-rot-deg');
       if (rEl) rEl.value = c.meter_rot_deg;
@@ -523,6 +549,9 @@ async function saveFullConfig() {
     ai_server_url: document.getElementById('cfg-ai-url').value.trim(),
     meter_mode: parseInt(document.getElementById('sel-meter-mode').value) || 0,
     meter_baseline: (document.getElementById('inp-meter-base').value || '').trim(),
+    meter_serial: (document.getElementById('inp-meter-serial')?.value || '00000198').trim(),
+    meter_spec: (document.getElementById('inp-meter-spec')?.value || 'GB/T778-2018 R=80').trim(),
+    serial_auto_detect: document.getElementById('chk-serial-auto')?.checked ? 1 : 0,
     meter_rot_deg: parseInt(document.getElementById('rng-rot-deg').value) || 0,
     flash_mode: isNaN(parseInt(document.getElementById('sel-flash-mode').value)) ? 1 : parseInt(document.getElementById('sel-flash-mode').value),
     flash_cap_duty: isNaN(parseInt(document.getElementById('rng-flash-cap').value)) ? 55 : parseInt(document.getElementById('rng-flash-cap').value),
@@ -638,8 +667,13 @@ async function updateStatus() {
         nextCapLbl.textContent = 'Chu kỳ: Tắt';
       }
     }
+    if (d.meter_serial || d.meter_spec) {
+      const idBadge = document.getElementById('lbl-meter-identity');
+      if (idBadge) idBadge.textContent = `🏷️ SN: ${d.meter_serial || '00000198'} | ${d.meter_spec || 'GB/T778-2018 R=80'}`;
+    }
     if (d.edge_digits && d.edge_digits !== '----' && (!d.last_ai || d.last_ai.includes('idle'))) {
       document.getElementById('rd-dial-val').textContent = d.edge_digits;
+      if (d.edge_detail) document.getElementById('rd-dial-sub').textContent = d.edge_detail;
     }
 
     // Pipeline Status Bar (Tab 2)

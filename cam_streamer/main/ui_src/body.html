@@ -80,8 +80,9 @@
 
         <!-- SMART METER & INDICATOR READOUT DASHBOARD -->
         <div class="card">
-          <div class="card-title">
-            <span>📟 Kết Quả Đọc Chỉ Số Công Nghiệp (Đèn Báo / LED 7 Thanh / LCD)</span>
+          <div class="card-title" style="flex-wrap:wrap;gap:6px">
+            <span>📟 Kết Quả Đọc Chỉ Số Công Nghiệp</span>
+            <span class="badge ok" id="lbl-meter-identity" style="font-family:monospace;font-size:11px;padding:2px 8px">🏷️ SN: 00000198 | GB/T778-2018 R=80</span>
             <span style="font-size:11px;color:var(--muted)" id="ftp-last-st">FTP: Sẵn sàng</span>
           </div>
           <div class="meter-grid">
@@ -171,12 +172,24 @@
 
             <div class="ctrl-group" style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);padding:9px 10px;border-radius:10px">
               <div class="ctrl-label">
-                <span style="color:#fbbf24">📌 Căn Chuẩn Số Gốc V(t-1) (Khử đọc nhầm Kim/Số lửng)</span>
+                <span style="color:#fbbf24">📌 Căn Chuẩn Số Gốc V(t-1) &amp; Định Danh Đồng Hồ (MQTT/Fleet)</span>
                 <span id="lbl-next-cap" style="color:#34d399">Chu kỳ: Tắt</span>
               </div>
-              <div style="display:flex;gap:6px;margin-top:3px">
-                <input type="text" id="inp-meter-base" placeholder="VD: 00125.432 (m³)" style="flex:1;font-family:monospace">
+              <div style="display:flex;gap:6px;margin-top:3px;flex-wrap:wrap">
+                <input type="text" id="inp-meter-base" placeholder="Số gốc VD: 00304.954" style="flex:1;min-width:130px;font-family:monospace">
                 <button class="btn btn-sm btn-primary" onclick="saveMeterBaseline()">📌 Gán Số Gốc</button>
+              </div>
+              <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+                <input type="text" id="inp-meter-serial" placeholder="Serial (VD: 00000198 hoặc AUTO)" style="flex:1;min-width:115px;font-family:monospace" title="Số Serial khắc trên mặt đồng hồ">
+                <input type="text" id="inp-meter-spec" placeholder="Mã chuẩn (VD: GB/T778-2018 R=80)" style="flex:1.2;min-width:135px;font-family:monospace" title="Mã tiêu chuẩn & cấp chính xác R">
+                <button class="btn btn-sm btn-accent" onclick="saveMeterIdentity()">🏷️ Lưu Serial</button>
+              </div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:5px;flex-wrap:wrap;gap:6px">
+                <label style="font-size:11px;color:#38bdf8;display:flex;align-items:center;gap:4px;cursor:pointer">
+                  <input type="checkbox" id="chk-serial-auto" checked onchange="setCamCtrl('serial_auto', this.checked ? 1 : 0)">
+                  🤖 AI tự động nhận diện Serial &amp; Mã đồng hồ
+                </label>
+                <span style="font-size:10.5px;color:var(--muted);font-family:monospace" id="lbl-mqtt-serial-topic">MQTT: esp32cam/meter/00000198</span>
               </div>
               <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
                 <select id="sel-cycle-preset" style="flex:1;min-width:140px" onchange="onCyclePresetChange(this.value)">

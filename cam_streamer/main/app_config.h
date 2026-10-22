@@ -74,9 +74,12 @@ typedef struct {
     uint8_t roi_w_pct;     // 10 - 100 (%)
     uint8_t roi_h_pct;     // 10 - 100 (%)
     bool roi_draw_osd;     // Draw ROI box on captured image
-    char meter_baseline[24];       // Prior calibrated reading e.g. "00125.432"
+    char meter_baseline[24];       // Prior calibrated reading e.g. "00304.954"
     uint16_t meter_max_flow_lpm;   // Max physical flow rate (L/min, default 50 L/min = 3.0 m3/h)
     int16_t meter_rot_deg;         // Fine rotation angle (-180 .. +180 deg) to deskew tilted meters
+    char meter_serial[24];         // Meter Serial Number e.g. "00000198" (or "AUTO" for AI auto-detect)
+    char meter_spec[32];           // Meter Model/Standard Spec e.g. "GB/T778-2018 R=80"
+    bool serial_auto_detect;       // true = Auto-detect/verify serial & spec from meter face
 
     // Camera & Auxiliary Flash LED (GPIO 4 PWM) Settings
     uint8_t cam_framesize; // FRAMESIZE_VGA = 10, SVGA = 11, XGA = 12, HD = 13, UXGA = 15

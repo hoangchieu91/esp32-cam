@@ -2,6 +2,7 @@
 #include "app_config.h"
 #include "img_converters.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 #include <time.h>
 #include <sys/time.h>
@@ -23,8 +24,14 @@ edge_ai_result_t g_last_edge_ai = {
     .roi_g = 0,
     .roi_b = 0,
     .edge_led_state = "OFF",
-    .edge_digits = "----"
+    .edge_digits = "----",
+    .edge_detail = "Ready",
+    .edge_flow_lpm = 0.0f,
+    .edge_filter_state = "INIT"
 };
+
+static double s_edge_prev_val = -1.0;
+static int64_t s_edge_prev_ts_sec = 0;
 
 // 7-Segment bitmask table: bit6=a, bit5=b, bit4=c, bit3=d, bit2=e, bit1=f, bit0=g
 static const struct { uint8_t mask; char ch; } s_seg7_table[] = {
@@ -263,7 +270,12 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
     g_last_edge_ai.roi_luma = roi_samples ? (uint8_t)(roi_luma_sum / roi_samples) : 0;
     g_last_edge_ai.roi_max_luma = max_luma;
 
-    if (bright_cnt >= 2 && max_luma >= 150) {
+    if (g_cfg.meter_mode >= 3) {
+        g_last_edge_ai.roi_r = 0;
+        g_last_edge_ai.roi_g = 0;
+        g_last_edge_ai.roi_b = 0;
+        snprintf(g_last_edge_ai.edge_led_state, sizeof(g_last_edge_ai.edge_led_state), "OFF");
+    } else if (bright_cnt >= 2 && max_luma >= 150) {
         uint8_t mr = (uint8_t)(bright_r / bright_cnt);
         uint8_t mg = (uint8_t)(bright_g / bright_cnt);
         uint8_t mb = (uint8_t)(bright_b / bright_cnt);
@@ -331,64 +343,304 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
     if (d_idx > 0 && g_cfg.meter_mode != 4) {
         decoded_str[d_idx] = '\0';
         snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%s", decoded_str);
+        snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail), "Edge 7Seg/LCD: %s", decoded_str);
     } else if (g_cfg.meter_mode == 4 || g_cfg.meter_mode == 0) {
-        // On-Device Analog Water Meter Red-Pointer Sub-Dial Angle Decoder (4 Sub-Dials x0.1 .. x0.0001)
-        char dial_digits[8] = {0};
+        // 100% Standalone On-Device Water Meter Red-Pointer Engine in PSRAM:
+        // Coordinate-Rotated ROI + Integer HSV Red Segmentation + 2-Pass Chamfer Distance Transform
+        // + 2D BFS Connected Components + Cascaded Gear Coupling (D1-D2-D3) + Monotonic Carry Filter
+        int rot = (int)g_cfg.meter_rot_deg;
+        int rw_r = (rot == -90 || rot == 90) ? rh : rw;
+        int rh_r = (rot == -90 || rot == 90) ? rw : rh;
+        int gw = rw_r / 2;
+        int gh = rh_r / 2;
         int found_dials = 0;
-        int sub_w = rw / 4;
-        if (sub_w >= 12) {
-            for (int k = 0; k < 4; k++) {
-                int sx0 = rx0 + k * sub_w;
-                int sx1 = sx0 + sub_w;
-                int cx = (sx0 + sx1) / 2;
-                int cy = ry0 + (rh / 2);
-                int max_dist2 = 0;
-                int tip_dx = 0, tip_dy = 0;
-                int red_pts = 0;
-                for (int y = ry0 + 2; y < ry0 + rh - 2; y += 2) {
-                    for (int x = sx0 + 2; x < sx1 - 2; x += 2) {
-                        const uint8_t *p = rgb565 + (y * width + x) * 2;
+        char dial_digits[8] = {0};
+
+        if (gw >= 32 && gh >= 32) {
+            size_t cells = (size_t)gw * (size_t)gh;
+            uint16_t *dist = (uint16_t *)heap_caps_calloc(cells, sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            uint8_t *vis   = (uint8_t *)heap_caps_calloc(cells, sizeof(uint8_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            int32_t *q_buf = (int32_t *)heap_caps_malloc(cells * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+            if (dist && vis && q_buf) {
+                int v_start = (gh * 43) / 100; // Mask top 43% (exclude 5-digit roller box & red unit digit)
+                int v_end   = (gh * 96) / 100;
+                int u_start = (gw *  4) / 100;
+                int u_end   = (gw * 96) / 100;
+
+                // 1. Sample rotated ROI & segment red pointer pixels
+                for (int gy = v_start; gy < v_end; gy++) {
+                    int v = gy * 2;
+                    for (int gx = u_start; gx < u_end; gx++) {
+                        int u = gx * 2;
+                        int px, py;
+                        if (rot == -90) {
+                            px = rx0 + (rw - 1 - v);
+                            py = ry0 + u;
+                        } else if (rot == 90) {
+                            px = rx0 + v;
+                            py = ry0 + (rh - 1 - u);
+                        } else if (rot == 180 || rot == -180) {
+                            px = rx0 + (rw - 1 - u);
+                            py = ry0 + (rh - 1 - v);
+                        } else {
+                            px = rx0 + u;
+                            py = ry0 + v;
+                        }
+                        if (px < 0 || px >= width || py < 0 || py >= height) continue;
+                        const uint8_t *p = rgb565 + (py * width + px) * 2;
                         uint8_t r, g, b;
                         rgb565_be_to_rgb(p, &r, &g, &b);
-                        if (r > 95 && r > g + 32 && r > b + 32) {
-                            red_pts++;
-                            int dx = x - cx;
-                            int dy = y - cy;
-                            int d2 = dx * dx + dy * dy;
-                            if (d2 > max_dist2) {
-                                max_dist2 = d2;
-                                tip_dx = dx;
-                                tip_dy = dy;
+                        int mn = (g < b) ? g : b;
+                        int diff = (int)r - mn;
+                        int gb_diff = ((int)g > (int)b) ? ((int)g - (int)b) : ((int)b - (int)g);
+                        if (r >= 35 && diff * 255 >= 38 * (int)r && r >= g && r >= b && gb_diff * 10 <= diff * 9) {
+                            dist[gy * gw + gx] = 1000;
+                        }
+                    }
+                }
+
+                // 2. 1-step Morphological Hole Closing
+                for (int gy = v_start + 1; gy < v_end - 1; gy++) {
+                    for (int gx = u_start + 1; gx < u_end - 1; gx++) {
+                        if (dist[gy * gw + gx] == 0) {
+                            int n_on = (dist[(gy - 1) * gw + gx] > 0) + (dist[(gy + 1) * gw + gx] > 0) +
+                                       (dist[gy * gw + (gx - 1)] > 0) + (dist[gy * gw + (gx + 1)] > 0);
+                            if (n_on >= 3) dist[gy * gw + gx] = 1000;
+                        }
+                    }
+                }
+
+                // 3. 2-Pass 3-4 Chamfer Distance Transform (finds fat pointer hub vs sharp tip)
+                for (int gy = v_start + 1; gy < v_end - 1; gy++) {
+                    for (int gx = u_start + 1; gx < u_end - 1; gx++) {
+                        uint16_t cur = dist[gy * gw + gx];
+                        if (cur > 0) {
+                            uint16_t m = dist[(gy - 1) * gw + gx] + 3;
+                            uint16_t t = dist[gy * gw + (gx - 1)] + 3; if (t < m) m = t;
+                            t = dist[(gy - 1) * gw + (gx - 1)] + 4;    if (t < m) m = t;
+                            t = dist[(gy - 1) * gw + (gx + 1)] + 4;    if (t < m) m = t;
+                            if (m < cur) dist[gy * gw + gx] = m;
+                        }
+                    }
+                }
+                for (int gy = v_end - 2; gy > v_start; gy--) {
+                    for (int gx = u_end - 2; gx > u_start; gx--) {
+                        uint16_t cur = dist[gy * gw + gx];
+                        if (cur > 0) {
+                            uint16_t m = cur;
+                            uint16_t t = dist[(gy + 1) * gw + gx] + 3; if (t < m) m = t;
+                            t = dist[gy * gw + (gx + 1)] + 3;          if (t < m) m = t;
+                            t = dist[(gy + 1) * gw + (gx + 1)] + 4;    if (t < m) m = t;
+                            t = dist[(gy + 1) * gw + (gx - 1)] + 4;    if (t < m) m = t;
+                            dist[gy * gw + gx] = m;
+                        }
+                    }
+                }
+
+                // 4. 2D BFS Connected Components to extract up to 6 candidate blobs
+                typedef struct {
+                    int count;
+                    float mean_x;
+                    float raw_val;
+                } dial_cand_t;
+                dial_cand_t cands[8];
+                int n_cands = 0;
+                int max_comp_pts = 0;
+
+                for (int gy = v_start; gy < v_end; gy++) {
+                    for (int gx = u_start; gx < u_end; gx++) {
+                        if (dist[gy * gw + gx] > 0 && !vis[gy * gw + gx]) {
+                            int q_head = 0, q_tail = 0;
+                            q_buf[q_tail++] = (gy << 16) | gx;
+                            vis[gy * gw + gx] = 1;
+                            uint16_t max_d = 0;
+                            int sum_x = 0;
+
+                            while (q_head < q_tail) {
+                                int32_t pk = q_buf[q_head++];
+                                int cy = (pk >> 16) & 0xFFFF;
+                                int cx = pk & 0xFFFF;
+                                uint16_t dval = dist[cy * gw + cx];
+                                if (dval > max_d) max_d = dval;
+                                sum_x += cx;
+
+                                for (int dy = -2; dy <= 2; dy++) {
+                                    int ny = cy + dy;
+                                    if (ny < v_start || ny >= v_end) continue;
+                                    for (int dx = -2; dx <= 2; dx++) {
+                                        int nx = cx + dx;
+                                        if (nx < u_start || nx >= u_end) continue;
+                                        if (dist[ny * gw + nx] > 0 && !vis[ny * gw + nx]) {
+                                            vis[ny * gw + nx] = 1;
+                                            if (q_tail < (int)cells) {
+                                                q_buf[q_tail++] = (ny << 16) | nx;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (q_tail >= 35 && n_cands < 8) {
+                                if (q_tail > max_comp_pts) max_comp_pts = q_tail;
+                                uint16_t hub_thr = (uint16_t)((max_d * 3) / 4);
+                                if (hub_thr < 3) hub_thr = 3;
+                                float h_wx = 0.0f, h_wy = 0.0f, h_wsum = 0.0f;
+                                for (int i = 0; i < q_tail; i++) {
+                                    int cy = (q_buf[i] >> 16) & 0xFFFF;
+                                    int cx = q_buf[i] & 0xFFFF;
+                                    uint16_t dv = dist[cy * gw + cx];
+                                    if (dv >= hub_thr) {
+                                        h_wx += (float)cx * (float)dv;
+                                        h_wy += (float)cy * (float)dv;
+                                        h_wsum += (float)dv;
+                                    }
+                                }
+                                if (h_wsum > 0.0f) {
+                                    float hub_x = h_wx / h_wsum;
+                                    float hub_y = h_wy / h_wsum;
+                                    // Find max distance from hub_x, hub_y
+                                    float max_r2 = 0.0f;
+                                    for (int i = 0; i < q_tail; i++) {
+                                        float dx = (float)(q_buf[i] & 0xFFFF) - hub_x;
+                                        float dy = (float)((q_buf[i] >> 16) & 0xFFFF) - hub_y;
+                                        float r2 = dx * dx + dy * dy;
+                                        if (r2 > max_r2) max_r2 = r2;
+                                    }
+                                    // Average top tip points (>= 82% of max radius)
+                                    float tip_thr2 = max_r2 * 0.68f;
+                                    float t_sx = 0.0f, t_sy = 0.0f, t_cnt = 0.0f;
+                                    for (int i = 0; i < q_tail; i++) {
+                                        float px = (float)(q_buf[i] & 0xFFFF);
+                                        float py = (float)((q_buf[i] >> 16) & 0xFFFF);
+                                        float dx = px - hub_x;
+                                        float dy = py - hub_y;
+                                        if (dx * dx + dy * dy >= tip_thr2) {
+                                            t_sx += px;
+                                            t_sy += py;
+                                            t_cnt += 1.0f;
+                                        }
+                                    }
+                                    if (t_cnt > 0.0f) {
+                                        float tip_x = t_sx / t_cnt;
+                                        float tip_y = t_sy / t_cnt;
+                                        float ang = atan2f(tip_x - hub_x, -(tip_y - hub_y)) * (180.0f / 3.14159265f);
+                                        while (ang < 0.0f) ang += 360.0f;
+                                        while (ang >= 360.0f) ang -= 360.0f;
+                                        cands[n_cands].count = q_tail;
+                                        cands[n_cands].mean_x = (float)sum_x / (float)q_tail;
+                                        cands[n_cands].raw_val = ang / 36.0f;
+                                        n_cands++;
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                if (red_pts >= 3 && max_dist2 >= 9) {
-                    float ang = atan2f((float)tip_dx, (float)(-tip_dy)) * (180.0f / 3.14159265f);
-                    ang -= (float)g_cfg.meter_rot_deg;
-                    while (ang < 0.0f) ang += 360.0f;
-                    while (ang >= 360.0f) ang -= 360.0f;
-                    int dig = ((int)(ang / 36.0f)) % 10;
-                    dial_digits[k] = (char)('0' + dig);
-                    found_dials++;
-                } else {
-                    dial_digits[k] = '-';
+
+                // Filter out noise blobs (< 42% of largest pointer blob) & sort by mean_x descending (D1 -> D2 -> D3)
+                int min_valid_pts = (max_comp_pts * 42) / 100;
+                if (min_valid_pts < 35) min_valid_pts = 35;
+                dial_cand_t valid_dials[4];
+                for (int i = 0; i < n_cands; i++) {
+                    if (cands[i].count >= min_valid_pts && found_dials < 4) {
+                        valid_dials[found_dials++] = cands[i];
+                    }
+                }
+                for (int i = 0; i < found_dials - 1; i++) {
+                    for (int j = i + 1; j < found_dials; j++) {
+                        if (valid_dials[j].mean_x > valid_dials[i].mean_x) {
+                            dial_cand_t tmp = valid_dials[i];
+                            valid_dials[i] = valid_dials[j];
+                            valid_dials[j] = tmp;
+                        }
+                    }
+                }
+
+                // 5. Cascaded Gear Coupling (from fastest pointer D_last back to D1)
+                if (found_dials >= 2) {
+                    int coupled[4] = {0};
+                    coupled[found_dials - 1] = ((int)roundf(valid_dials[found_dials - 1].raw_val)) % 10;
+                    for (int i = found_dials - 2; i >= 0; i--) {
+                        float rv = valid_dials[i].raw_val;
+                        int lower_d = coupled[i + 1];
+                        int int_d = ((int)floorf(rv)) % 10;
+                        float frac = rv - floorf(rv);
+                        if (frac > 0.65f && lower_d < 4) {
+                            int_d = (int_d + 1) % 10;
+                        } else if (frac < 0.30f && lower_d >= 7) {
+                            int_d = (int_d + 9) % 10;
+                        }
+                        coupled[i] = int_d;
+                    }
+                    for (int i = 0; i < found_dials; i++) {
+                        dial_digits[i] = (char)('0' + coupled[i]);
+                    }
+                    dial_digits[found_dials] = '\0';
                 }
             }
+            if (dist) free(dist);
+            if (vis) free(vis);
+            if (q_buf) free(q_buf);
         }
+
         if (found_dials >= 2) {
-            dial_digits[4] = '\0';
-            if (g_cfg.meter_baseline[0] != '\0') {
-                int int_part = atoi(g_cfg.meter_baseline);
-                snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%05d.%s", int_part, dial_digits);
-            } else {
-                snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "0.%s", dial_digits);
+            int int_part = g_cfg.meter_baseline[0] ? atoi(g_cfg.meter_baseline) : 0;
+            double frac_Scale = (found_dials == 3) ? 1000.0 : ((found_dials == 2) ? 100.0 : 10000.0);
+            double raw_frac = atof(dial_digits) / frac_Scale;
+            double cand_val = (double)int_part + raw_frac;
+            int64_t now_sec = esp_timer_get_time() / 1000000LL;
+
+            if (s_edge_prev_val < 0.0 && g_cfg.meter_baseline[0]) {
+                s_edge_prev_val = atof(g_cfg.meter_baseline);
+                s_edge_prev_ts_sec = now_sec;
             }
+
+            if (s_edge_prev_val > 0.0) {
+                double delta = cand_val - s_edge_prev_val;
+                // Automatic integer carry rollover when D1 wraps from .9xx to .0xx
+                if (delta < -0.50 && delta > -0.99) {
+                    int_part += 1;
+                    cand_val = (double)int_part + raw_frac;
+                    delta = cand_val - s_edge_prev_val;
+                    snprintf(g_last_edge_ai.edge_filter_state, sizeof(g_last_edge_ai.edge_filter_state), "CARRY_ROLLOVER");
+                } else if (delta >= -0.008 && delta < 0.0) {
+                    cand_val = s_edge_prev_val;
+                    delta = 0.0;
+                    snprintf(g_last_edge_ai.edge_filter_state, sizeof(g_last_edge_ai.edge_filter_state), "CLAMPED_JITTER");
+                } else {
+                    snprintf(g_last_edge_ai.edge_filter_state, sizeof(g_last_edge_ai.edge_filter_state), "VALID_MONOTONIC");
+                }
+
+                int64_t dt_s = (now_sec > s_edge_prev_ts_sec) ? (now_sec - s_edge_prev_ts_sec) : 10;
+                if (delta > 0.0 && delta <= 0.25 && dt_s >= 2) {
+                    g_last_edge_ai.edge_flow_lpm = (float)((delta * 1000.0) / ((double)dt_s / 60.0));
+                } else {
+                    g_last_edge_ai.edge_flow_lpm = 0.0f;
+                }
+            } else {
+                snprintf(g_last_edge_ai.edge_filter_state, sizeof(g_last_edge_ai.edge_filter_state), "VALID_MONOTONIC");
+                g_last_edge_ai.edge_flow_lpm = 0.0f;
+            }
+
+            s_edge_prev_val = cand_val;
+            s_edge_prev_ts_sec = now_sec;
+
+            if (found_dials == 3) {
+                snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%04d.%s", int_part, dial_digits);
+            } else {
+                snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%04d.%s", int_part, dial_digits);
+            }
+            snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail),
+                     "EdgeAI Độc lập (.%s) | SN:%s",
+                     dial_digits, g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198");
         } else if (d_idx > 0) {
             decoded_str[d_idx] = '\0';
             snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%s", decoded_str);
+            snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail), "Edge OCR: %s", decoded_str);
         } else if (g_cfg.meter_baseline[0] != '\0' && g_cfg.meter_mode == 4) {
             snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%.15s", g_cfg.meter_baseline);
+            snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail), "Giữ số gốc V(t-1) (Đợi đèn Flash)");
         } else {
             snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "----");
         }

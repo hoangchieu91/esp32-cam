@@ -326,14 +326,17 @@ void app_config_reset_defaults(void) {
 
     // Smart Meter & Indicator ROI defaults (Calibrated for Ningbo GB/T 778-2018 Rotary Water Meter)
     g_cfg.meter_mode = 4;
-    g_cfg.roi_x_pct = 14;
-    g_cfg.roi_y_pct = 10;
-    g_cfg.roi_w_pct = 72;
-    g_cfg.roi_h_pct = 76;
+    g_cfg.roi_x_pct = 8;
+    g_cfg.roi_y_pct = 3;
+    g_cfg.roi_w_pct = 84;
+    g_cfg.roi_h_pct = 94;
     g_cfg.roi_draw_osd = true;
-    strncpy(g_cfg.meter_baseline, "00304.426", sizeof(g_cfg.meter_baseline) - 1);
+    strncpy(g_cfg.meter_baseline, "00304.954", sizeof(g_cfg.meter_baseline) - 1);
     g_cfg.meter_max_flow_lpm = 50; // 50 L/min = 3.0 m3/h max residential water meter flow
     g_cfg.meter_rot_deg = -90;     // -90 deg CCW upright deskew
+    strncpy(g_cfg.meter_serial, "00000198", sizeof(g_cfg.meter_serial) - 1);
+    strncpy(g_cfg.meter_spec, "GB/T778-2018 R=80", sizeof(g_cfg.meter_spec) - 1);
+    g_cfg.serial_auto_detect = true;
 
     // Camera & Auxiliary Flash LED (GPIO 4 PWM) defaults
     g_cfg.cam_framesize = 10;
@@ -389,11 +392,23 @@ void app_config_init(void) {
     if (err == ESP_OK) {
         size_t required_size = sizeof(app_config_t);
         err = nvs_get_blob(handle, NVS_BLOB_KEY, &g_cfg, &required_size);
-        nvs_close(handle);
         if (err != ESP_OK || required_size != sizeof(app_config_t)) {
-            ESP_LOGW(TAG, "App config struct version changed -> resetting general settings while preserving VPN Vault...");
+            ESP_LOGW(TAG, "App config struct version changed -> resetting general settings while preserving VPN Vault & Meter Identity...");
             app_config_reset_defaults();
+            size_t sz;
+            sz = sizeof(g_cfg.meter_serial); nvs_get_str(handle, "m_serial", g_cfg.meter_serial, &sz);
+            sz = sizeof(g_cfg.meter_spec);   nvs_get_str(handle, "m_spec",   g_cfg.meter_spec,   &sz);
+            sz = sizeof(g_cfg.meter_baseline); nvs_get_str(handle, "m_base", g_cfg.meter_baseline, &sz);
+            uint8_t sauto = 1;
+            if (nvs_get_u8(handle, "m_sauto", &sauto) == ESP_OK) g_cfg.serial_auto_detect = (sauto != 0);
         }
+        nvs_close(handle);
+    }
+    if (g_cfg.meter_serial[0] == '\0') {
+        strncpy(g_cfg.meter_serial, "00000198", sizeof(g_cfg.meter_serial) - 1);
+    }
+    if (g_cfg.meter_spec[0] == '\0') {
+        strncpy(g_cfg.meter_spec, "GB/T778-2018 R=80", sizeof(g_cfg.meter_spec) - 1);
     }
 
     // Never persist continuous manual torch across reboots (prevents 24/7 LED glare/heating)
@@ -432,6 +447,10 @@ esp_err_t app_config_save(void) {
         nvs_commit(handle);
         err = nvs_set_blob(handle, NVS_BLOB_KEY, &g_cfg, sizeof(app_config_t));
     }
+    nvs_set_str(handle, "m_serial", g_cfg.meter_serial);
+    nvs_set_str(handle, "m_spec",   g_cfg.meter_spec);
+    nvs_set_str(handle, "m_base",   g_cfg.meter_baseline);
+    nvs_set_u8(handle,  "m_sauto",  g_cfg.serial_auto_detect ? 1 : 0);
     if (err == ESP_OK) {
         err = nvs_commit(handle);
     }

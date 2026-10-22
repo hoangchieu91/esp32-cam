@@ -193,16 +193,22 @@ static esp_err_t execute_capture_pipeline(const char *mode, char *out_filename, 
         free(raw_buf);
     }
 
-    // 4. Publish Real-Time MQTT Event
+    // 4. Publish Real-Time MQTT Event (Global + Per-Meter Serial Topic)
     char *mqtt_event = (char *)calloc(1, 2560);
     if (mqtt_event) {
+        const char *sn = g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198";
+        const char *spec = g_cfg.meter_spec[0] ? g_cfg.meter_spec : "GB/T778-2018 R=80";
         snprintf(mqtt_event, 2560,
-                 "{\"event\":\"capture\",\"source\":\"%s\",\"file\":\"%s\",\"size\":%u,"
-                 "\"ftp\":\"%s\",\"edge_motion\":%.1f,\"edge_led\":\"%s\",\"ai\":%s}",
-                 mode ? mode : "manual", base_name, (unsigned)work_len,
-                 ftp_err, g_last_edge_ai.motion_score, g_last_edge_ai.edge_led_state,
+                 "{\"event\":\"capture\",\"source\":\"%s\",\"meter_serial\":\"%s\",\"meter_spec\":\"%s\","
+                 "\"file\":\"%s\",\"size\":%u,\"ftp\":\"%s\",\"edge_digits\":\"%s\",\"edge_motion\":%.1f,"
+                 "\"edge_led\":\"%s\",\"ai\":%s}",
+                 mode ? mode : "manual", sn, spec, base_name, (unsigned)work_len,
+                 ftp_err, g_last_edge_ai.edge_digits, g_last_edge_ai.motion_score, g_last_edge_ai.edge_led_state,
                  (ai_ret == ESP_OK && ai_resp && ai_resp[0] == '{') ? ai_resp : "\"pending\"");
         net_mqtt_publish_event("capture", mqtt_event);
+        char serial_cap_topic[64];
+        snprintf(serial_cap_topic, sizeof(serial_cap_topic), "meter/%s/capture", sn);
+        net_mqtt_publish_event(serial_cap_topic, mqtt_event);
         free(mqtt_event);
     }
 
@@ -345,6 +351,9 @@ static esp_err_t status_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "edge_luma", g_last_edge_ai.mean_luma);
     cJSON_AddStringToObject(root, "edge_led_state", g_last_edge_ai.edge_led_state);
     cJSON_AddStringToObject(root, "edge_digits", g_last_edge_ai.edge_digits);
+    cJSON_AddStringToObject(root, "edge_detail", g_last_edge_ai.edge_detail);
+    cJSON_AddNumberToObject(root, "edge_flow_lpm", g_last_edge_ai.edge_flow_lpm);
+    cJSON_AddStringToObject(root, "edge_filter_state", g_last_edge_ai.edge_filter_state);
     cJSON_AddNumberToObject(root, "roi_luma", g_last_edge_ai.roi_luma);
     cJSON_AddNumberToObject(root, "roi_max_luma", g_last_edge_ai.roi_max_luma);
     cJSON_AddNumberToObject(root, "meter_mode", g_cfg.meter_mode);
@@ -355,6 +364,9 @@ static esp_err_t status_handler(httpd_req_t *req) {
     cJSON_AddStringToObject(root, "meter_baseline", g_cfg.meter_baseline);
     cJSON_AddNumberToObject(root, "meter_max_flow_lpm", g_cfg.meter_max_flow_lpm);
     cJSON_AddNumberToObject(root, "meter_rot_deg", g_cfg.meter_rot_deg);
+    cJSON_AddStringToObject(root, "meter_serial", g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198");
+    cJSON_AddStringToObject(root, "meter_spec", g_cfg.meter_spec[0] ? g_cfg.meter_spec : "GB/T778-2018 R=80");
+    cJSON_AddBoolToObject(root, "serial_auto_detect", g_cfg.serial_auto_detect);
     cJSON_AddNumberToObject(root, "flash_duty", app_flash_get_duty());
     cJSON_AddNumberToObject(root, "flash_mode", g_cfg.flash_mode);
     cJSON_AddNumberToObject(root, "flash_cap_duty", g_cfg.flash_cap_duty);
@@ -495,6 +507,9 @@ static esp_err_t config_get_handler(httpd_req_t *req) {
     cJSON_AddStringToObject(root, "meter_baseline", g_cfg.meter_baseline);
     cJSON_AddNumberToObject(root, "meter_max_flow_lpm", g_cfg.meter_max_flow_lpm);
     cJSON_AddNumberToObject(root, "meter_rot_deg", g_cfg.meter_rot_deg);
+    cJSON_AddStringToObject(root, "meter_serial", g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198");
+    cJSON_AddStringToObject(root, "meter_spec", g_cfg.meter_spec[0] ? g_cfg.meter_spec : "GB/T778-2018 R=80");
+    cJSON_AddBoolToObject(root, "serial_auto_detect", g_cfg.serial_auto_detect);
 
     cJSON_AddNumberToObject(root, "cam_framesize", g_cfg.cam_framesize);
     cJSON_AddNumberToObject(root, "cam_quality", g_cfg.cam_quality);
@@ -598,6 +613,9 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     JSON_STR_COPY(root, "meter_baseline", g_cfg.meter_baseline);
     JSON_INT_SET(root, "meter_max_flow_lpm", g_cfg.meter_max_flow_lpm);
     JSON_INT_SET(root, "meter_rot_deg", g_cfg.meter_rot_deg);
+    JSON_STR_COPY(root, "meter_serial", g_cfg.meter_serial);
+    JSON_STR_COPY(root, "meter_spec", g_cfg.meter_spec);
+    JSON_INT_SET(root, "serial_auto_detect", g_cfg.serial_auto_detect);
     JSON_INT_SET(root, "flash_mode", g_cfg.flash_mode);
     JSON_INT_SET(root, "flash_cap_duty", g_cfg.flash_cap_duty);
     JSON_INT_SET(root, "flash_warmup_ms", g_cfg.flash_warmup_ms);
@@ -938,6 +956,30 @@ static esp_err_t cmd_handler(httpd_req_t *req) {
             } else if (!strcmp(var, "meter_baseline")) {
                 strncpy(g_cfg.meter_baseline, val, sizeof(g_cfg.meter_baseline) - 1);
                 g_cfg.meter_baseline[sizeof(g_cfg.meter_baseline) - 1] = '\0';
+                app_config_save();
+            } else if (!strcmp(var, "meter_serial")) {
+                strncpy(g_cfg.meter_serial, val, sizeof(g_cfg.meter_serial) - 1);
+                g_cfg.meter_serial[sizeof(g_cfg.meter_serial) - 1] = '\0';
+                app_config_save();
+                net_mqtt_publish_telemetry();
+            } else if (!strcmp(var, "meter_spec")) {
+                // URL decode %20 to space
+                size_t j = 0;
+                for (size_t i = 0; val[i] && j + 1 < sizeof(g_cfg.meter_spec); i++) {
+                    if (val[i] == '%' && val[i+1] == '2' && val[i+2] == '0') {
+                        g_cfg.meter_spec[j++] = ' ';
+                        i += 2;
+                    } else if (val[i] == '+') {
+                        g_cfg.meter_spec[j++] = ' ';
+                    } else {
+                        g_cfg.meter_spec[j++] = val[i];
+                    }
+                }
+                g_cfg.meter_spec[j] = '\0';
+                app_config_save();
+                net_mqtt_publish_telemetry();
+            } else if (!strcmp(var, "serial_auto")) {
+                g_cfg.serial_auto_detect = (v != 0);
                 app_config_save();
             } else if (!strcmp(var, "meter_rot_deg")) {
                 if (v < -180) v = -180;
