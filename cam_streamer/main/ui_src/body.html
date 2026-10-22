@@ -88,31 +88,48 @@
           </div>
           <div class="meter-grid">
             <div class="meter-box">
-              <div class="meter-head"><span>💡 Đèn Báo (LED)</span><span id="rd-led-luma">Luma: --</span></div>
-              <div style="display:flex;align-items:center;margin-top:2px">
-                <span class="led-dot" id="rd-led-dot"></span>
-                <span class="digital-val" id="rd-led-val" style="font-size:19px">OFF</span>
+              <div class="meter-head"><span>💡 Đèn Báo (LED)</span><span class="badge info" id="rd-led-tag" style="font-size:9px;padding:1px 5px">⚡ESP32 + 🧠.171</span></div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-top:2px">
+                <div style="display:flex;align-items:center">
+                  <span class="led-dot" id="rd-led-dot"></span>
+                  <span class="digital-val" id="rd-led-val" style="font-size:19px">OFF</span>
+                </div>
+                <span id="rd-led-luma" style="font-size:10px;color:var(--muted)">Luma: --</span>
               </div>
               <div class="metric-sub" id="rd-led-sub">Edge + Server HSV Analysis</div>
             </div>
 
             <div class="meter-box">
-              <div class="meter-head"><span>🔢 LED 7 Thanh</span><span id="rd-7seg-conf">7-Seg OCR</span></div>
+              <div class="meter-head"><span>🔢 LED 7 Thanh</span><span class="badge info" id="rd-7seg-tag" style="font-size:9px;padding:1px 5px">🧠 NPU .171</span></div>
               <div class="digital-val" id="rd-7seg-val">----</div>
-              <div class="metric-sub" id="rd-7seg-sub">Đồng hồ nhiệt / áp suất / bộ đếm</div>
+              <div class="metric-sub" id="rd-7seg-sub"><span id="rd-7seg-conf">7-Seg OCR</span></div>
             </div>
 
             <div class="meter-box">
-              <div class="meter-head"><span>💧⚡🔥 Đồng Hồ LCD</span><span id="rd-lcd-unit">Nước/Điện/Khí</span></div>
+              <div class="meter-head"><span>💧⚡🔥 Số Cơ / LCD</span><span class="badge info" id="rd-lcd-tag" style="font-size:9px;padding:1px 5px">🧠 NPU .171</span></div>
               <div class="digital-val" id="rd-lcd-val" style="color:#38bdf8">----</div>
-              <div class="metric-sub" id="rd-lcd-sub">CLAHE + NPU OCR (.171)</div>
+              <div class="metric-sub" id="rd-lcd-sub"><span id="rd-lcd-unit">CLAHE + Drum OCR (.171)</span></div>
             </div>
 
             <div class="meter-box" style="border-color:rgba(245,158,11,0.35)">
-              <div class="meter-head"><span>🎡 Đồng Hồ Nước Kim Quay</span><span id="rd-dial-flow" style="color:#fbbf24">Lọc Lịch Sử</span></div>
+              <div class="meter-head"><span>🎡 Nước Kim Quay</span><span class="badge ok" id="rd-dial-tag" style="font-size:9px;padding:1px 5px">🧠.171 + ⚡ESP32</span></div>
               <div class="digital-val" id="rd-dial-val" style="color:#fbbf24">----</div>
-              <div class="metric-sub" id="rd-dial-sub">Góc kim quay + Khớp số cũ V(t-1)</div>
+              <div class="metric-sub" id="rd-dial-sub"><span id="rd-dial-flow" style="color:#fbbf24;font-weight:700">0.0 L/p</span></div>
             </div>
+          </div>
+
+          <!-- DUAL-MODEL INDEPENDENT COMPARISON BAR (EDGE-ESP32 VS SERVER .171) -->
+          <div style="margin-top:9px;background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.28);border-radius:10px;padding:8px 11px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:11.5px">
+              <span style="font-weight:800;color:#94a3b8;font-size:10.5px;text-transform:uppercase">⚖️ Đối chiếu 2 Mô hình Độc lập:</span>
+              <span style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);padding:2px 8px;border-radius:6px;font-family:monospace;color:#34d399" title="Mô hình C-Native chạy nội bộ trên chip ESP32-CAM (3-4 Chamfer Distance + Polar BFS)">
+                ⚡ <b>[Edge-ESP32]:</b> <span id="cmp-edge-val">----</span>
+              </span>
+              <span style="background:rgba(14,165,233,0.12);border:1px solid rgba(14,165,233,0.35);padding:2px 8px;border-radius:6px;font-family:monospace;color:#38bdf8" title="Mô hình Deep CV + StateFilter chạy trên Server RK3576 (10.25.7.171)">
+                🧠 <b>[Server .171]:</b> <span id="cmp-srv-val">----</span>
+              </span>
+            </div>
+            <span class="badge ok" id="cmp-consensus-badge" style="font-size:10.5px;font-family:monospace;padding:3px 9px">✅ Đang đối chiếu...</span>
           </div>
 
           <!-- HOURLY & DAILY CONSUMPTION BAR CHART + MULTI-DAY COMPARISON -->

@@ -391,7 +391,7 @@ esp_err_t net_ai_server_analyze(const uint8_t *jpg_data, size_t jpg_len, const c
     char *url_with_query = (char *)calloc(1, 512);
     if (!url_with_query) return ESP_ERR_NO_MEM;
     snprintf(url_with_query, 512,
-             "%s?file=%s&device=%s&serial=%s&sauto=%u&motion=%.1f&mode=%u&rx=%u&ry=%u&rw=%u&rh=%u&baseline=%s&max_flow=%u&rot=%d",
+             "%s?file=%s&device=%s&serial=%s&sauto=%u&motion=%.1f&mode=%u&rx=%u&ry=%u&rw=%u&rh=%u&baseline=%s&max_flow=%u&rot=%d&edge_val=%s",
              g_cfg.ai_server_url,
              filename ? filename : "frame.jpg",
              g_cfg.mdns_host,
@@ -402,7 +402,8 @@ esp_err_t net_ai_server_analyze(const uint8_t *jpg_data, size_t jpg_len, const c
              g_cfg.roi_x_pct, g_cfg.roi_y_pct, g_cfg.roi_w_pct, g_cfg.roi_h_pct,
              g_cfg.meter_baseline[0] ? g_cfg.meter_baseline : "",
              g_cfg.meter_max_flow_lpm ? g_cfg.meter_max_flow_lpm : 50,
-             (int)g_cfg.meter_rot_deg);
+             (int)g_cfg.meter_rot_deg,
+             g_last_edge_ai.edge_digits[0] ? g_last_edge_ai.edge_digits : "----");
 
     http_resp_collector_t collector = {
         .buf = resp_json,
@@ -430,6 +431,7 @@ esp_err_t net_ai_server_analyze(const uint8_t *jpg_data, size_t jpg_len, const c
     esp_http_client_set_header(client, "X-Device-Name", g_cfg.mdns_host);
     esp_http_client_set_header(client, "X-Meter-Serial", g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198");
     esp_http_client_set_header(client, "X-Meter-Spec", g_cfg.meter_spec[0] ? g_cfg.meter_spec : "GB/T778-2018 R=80");
+    esp_http_client_set_header(client, "X-Edge-Value", g_last_edge_ai.edge_digits[0] ? g_last_edge_ai.edge_digits : "----");
     esp_http_client_set_post_field(client, (const char *)jpg_data, jpg_len);
 
     esp_err_t err = esp_http_client_perform(client);
@@ -442,12 +444,11 @@ esp_err_t net_ai_server_analyze(const uint8_t *jpg_data, size_t jpg_len, const c
             strncpy(g_last_server_ai_json, resp_json, sizeof(g_last_server_ai_json) - 1);
             g_last_server_ai_json[sizeof(g_last_server_ai_json) - 1] = '\0';
 
-            // Auto-sync meter_baseline in RAM from validated dial_value so standalone Edge AI stays in lockstep
+            // Sync integer drum baseline in RAM so Edge AI knows the integer m3 drum while keeping g_last_edge_ai.edge_digits 100% independent!
             char det_dial[24] = {0};
             extract_json_str_field(g_last_server_ai_json, "dial_value", det_dial, sizeof(det_dial));
             if (det_dial[0] >= '0' && det_dial[0] <= '9') {
                 strncpy(g_cfg.meter_baseline, det_dial, sizeof(g_cfg.meter_baseline) - 1);
-                strncpy(g_last_edge_ai.edge_digits, det_dial, sizeof(g_last_edge_ai.edge_digits) - 1);
             }
 
             // Auto-detect & lock Meter Serial / Spec if serial_auto_detect is enabled

@@ -613,8 +613,8 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
                 }
 
                 int64_t dt_s = (now_sec > s_edge_prev_ts_sec) ? (now_sec - s_edge_prev_ts_sec) : 10;
-                if (delta > 0.0 && delta <= 0.25 && dt_s >= 2) {
-                    g_last_edge_ai.edge_flow_lpm = (float)((delta * 1000.0) / ((double)dt_s / 60.0));
+                if (delta > 0.0 && delta <= 2.5 && dt_s >= 2) {
+                    g_last_edge_ai.edge_flow_lpm = (float)((delta * 100.0) / ((double)dt_s / 60.0));
                 } else {
                     g_last_edge_ai.edge_flow_lpm = 0.0f;
                 }
@@ -626,25 +626,23 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
             s_edge_prev_val = cand_val;
             s_edge_prev_ts_sec = now_sec;
 
-            if (found_dials == 3) {
-                snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%04d.%s", int_part, dial_digits);
-            } else {
-                snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%04d.%s", int_part, dial_digits);
-            }
+            snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%04d.%s", int_part, dial_digits);
             snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail),
-                     "EdgeAI Độc lập (.%s) | SN:%s",
-                     dial_digits, g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198");
+                     "[Edge-ESP32] Kim .%s (%dD) | SN:%.12s",
+                     dial_digits, found_dials, g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198");
         } else if (d_idx > 0) {
             decoded_str[d_idx] = '\0';
             snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%s", decoded_str);
-            snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail), "Edge OCR: %s", decoded_str);
+            snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail), "[Edge-ESP32 OCR] %s", decoded_str);
+        } else if (g_last_edge_ai.edge_digits[0] >= '0' && g_last_edge_ai.edge_digits[0] <= '9') {
+            // Preserve last illuminated independent Edge-ESP32 reading when unlit background frame is dark
         } else if (g_cfg.meter_baseline[0] != '\0' && g_cfg.meter_mode == 4) {
             snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%.15s", g_cfg.meter_baseline);
-            snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail), "Giữ số gốc V(t-1) (Đợi đèn Flash)");
+            snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail), "[Edge-ESP32] Khởi tạo từ số gốc V(t-1)");
         } else {
             snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "----");
         }
-    } else {
+    } else if (g_last_edge_ai.edge_digits[0] < '0' || g_last_edge_ai.edge_digits[0] > '9') {
         snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "----");
     }
 }

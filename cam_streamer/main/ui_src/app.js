@@ -946,39 +946,97 @@ async function updateStatus() {
     if (d.edge_digits && d.edge_digits !== '----' && (!d.last_ai || d.last_ai.includes('idle'))) {
       document.getElementById('rd-dial-val').textContent = d.edge_digits;
       if (d.edge_detail) document.getElementById('rd-dial-sub').textContent = d.edge_detail;
+      const dTag = document.getElementById('rd-dial-tag');
+      if (dTag) dTag.textContent = '⚡ Edge-ESP32';
+      const cmpE = document.getElementById('cmp-edge-val');
+      if (cmpE) cmpE.textContent = d.edge_digits + ' m³';
+      const cmpS = document.getElementById('cmp-srv-val');
+      if (cmpS) cmpS.textContent = 'Đợi .171';
+      const cmpB = document.getElementById('cmp-consensus-badge');
+      if (cmpB) {
+        cmpB.className = 'badge info';
+        cmpB.textContent = '🛡️ Đang chạy độc lập trên ESP32';
+      }
     }
 
     // Pipeline Status Bar (Tab 2)
     document.getElementById('pipe-cam-st').textContent = `OV5640 (${d.last_capture_ms || 0}ms | OK:${d.capture_ok_cnt || 0})`;
-    document.getElementById('pipe-edge-st').textContent = `Motion ${(d.edge_motion||0).toFixed(0)}% | LED: ${d.edge_led_state||'OFF'}`;
+    document.getElementById('pipe-edge-st').textContent = `Motion ${(d.edge_motion||0).toFixed(0)}% | Edge: ${d.edge_digits||'----'}`;
     document.getElementById('pipe-ftp-st').textContent = `${d.ftp_status || 'Idle'} (OK:${d.ftp_ok_cnt||0})`;
     document.getElementById('pipe-mq-st').textContent = `MQTT: ${d.mqtt ? 'OK' : 'Off'} | Ntfy: ${d.ntfy_status || 'Idle'}`;
 
-    // Parse Server AI JSON for Smart Meter & Indicator results
+    // Parse Server AI JSON for Smart Meter & Indicator results + Dual-Model Comparison
     if (d.last_ai) {
       try {
         const ai = typeof d.last_ai === 'string' ? JSON.parse(d.last_ai) : d.last_ai;
         document.getElementById('ai-json-box').textContent = JSON.stringify(ai, null, 2);
+        const isStandaloneEdge = (ai.source === 'esp32_edge_standalone' || (ai.engine && ai.engine.includes('ESP32')));
+        const modelBadgeTxt = isStandaloneEdge ? '⚡ Edge-ESP32' : '🧠 NPU .171';
 
         const ledSt = (ai.meter && ai.meter.led_status) ? ai.meter.led_status : (d.edge_led_state || 'OFF');
         document.getElementById('rd-led-val').textContent = ledSt;
         updateLedDotStyle(ledSt);
         if (ai.meter && ai.meter.led_detail) {
-          document.getElementById('rd-led-sub').textContent = ai.meter.led_detail;
+          document.getElementById('rd-led-sub').textContent = `[${modelBadgeTxt}] ${ai.meter.led_detail}`;
         }
         if (ai.meter && ai.meter.seg7_value !== undefined) {
           document.getElementById('rd-7seg-val').textContent = ai.meter.seg7_value || '----';
-          document.getElementById('rd-7seg-sub').textContent = ai.meter.seg7_detail || 'Đã phân tích vùng ROI 7-Segment';
+          document.getElementById('rd-7seg-sub').textContent = `[${modelBadgeTxt}] ${ai.meter.seg7_detail || '7-Segment OCR'}`;
+          const sTag = document.getElementById('rd-7seg-tag');
+          if (sTag) sTag.textContent = modelBadgeTxt;
         }
         if (ai.meter && ai.meter.lcd_value !== undefined) {
           document.getElementById('rd-lcd-val').textContent = ai.meter.lcd_value || '----';
-          document.getElementById('rd-lcd-sub').textContent = ai.meter.lcd_detail || `Độ nét: ${ai.sharpness || '--'} | NPU: ${ai.latency_ms || '--'}ms`;
+          document.getElementById('rd-lcd-sub').textContent = `[${modelBadgeTxt}] ${ai.meter.lcd_detail || 'CLAHE + Drum OCR'}`;
+          const lTag = document.getElementById('rd-lcd-tag');
+          if (lTag) lTag.textContent = modelBadgeTxt;
         }
         if (ai.meter && ai.meter.dial_value !== undefined) {
-          document.getElementById('rd-dial-val').textContent = ai.meter.dial_value || '----';
-          document.getElementById('rd-dial-sub').textContent = ai.meter.dial_detail || 'Góc kim quay + Khớp số cũ V(t-1)';
+          const srvVal = ai.meter.dial_value || '----';
+          const edgeVal = (d.edge_digits && d.edge_digits !== '----') ? d.edge_digits : (ai.meter.edge_val || srvVal);
+          document.getElementById('rd-dial-val').textContent = srvVal;
+          document.getElementById('rd-dial-sub').textContent = `[${modelBadgeTxt}] ${ai.meter.dial_detail || ''} (${ai.meter.flow_lpm || 0} L/p)`;
+          const dTag = document.getElementById('rd-dial-tag');
+          if (dTag) dTag.textContent = isStandaloneEdge ? '⚡ Edge-ESP32' : '🧠.171 + ⚡ESP32';
+
+          // Populate Dual-Model Independent Comparison Bar
+          const cmpE = document.getElementById('cmp-edge-val');
+          const cmpS = document.getElementById('cmp-srv-val');
+          const cmpB = document.getElementById('cmp-consensus-badge');
+          if (cmpE) cmpE.textContent = `${edgeVal} m³`;
+          if (cmpS) cmpS.textContent = isStandaloneEdge ? 'Offline (Dùng ESP32)' : `${srvVal} m³`;
+          if (cmpB) {
+            if (isStandaloneEdge) {
+              cmpB.className = 'badge info';
+              cmpB.textContent = '🛡️ Độc lập tại biên [Edge-ESP32]';
+            } else {
+              const fS = parseFloat(srvVal);
+              const fE = parseFloat(edgeVal);
+              if (!isNaN(fS) && !isNaN(fE)) {
+                let rawDiff = Math.abs(fS - fE);
+                if (rawDiff >= 0.95) {
+                  rawDiff = Math.abs((fS % 1.0) - (fE % 1.0));
+                  if (rawDiff > 0.5) rawDiff = 1.0 - rawDiff;
+                }
+                const diffL = (rawDiff * 100.0).toFixed(1);
+                if (rawDiff * 100.0 <= 2.5) {
+                  cmpB.className = 'badge ok';
+                  cmpB.textContent = `✅ Khớp đồng thuận (Δ = ${diffL} L)`;
+                } else if (rawDiff * 100.0 <= 15.0) {
+                  cmpB.className = 'badge info';
+                  cmpB.textContent = `⚖️ Lệch nhẹ kim cuối (Δ = ${diffL} L)`;
+                } else {
+                  cmpB.className = 'badge warn';
+                  cmpB.textContent = `⚠️ Lệch mô hình (Δ = ${diffL} L)`;
+                }
+              } else {
+                cmpB.className = 'badge ok';
+                cmpB.textContent = ai.meter.consensus || '✅ Đã đối chiếu';
+              }
+            }
+          }
+
           if (ai.meter.flow_lpm !== undefined) {
-            document.getElementById('rd-dial-flow').textContent = `${ai.meter.flow_lpm} L/phút`;
             updateFlowSparkline(ai.meter.flow_lpm, ai.meter.leak_alert);
           }
         }
