@@ -1,0 +1,1241 @@
+<div class="container">
+  <!-- TOP HEADER & STATUS TELEMETRY BAR -->
+  <header class="header">
+    <div class="brand">
+      <span id="online-dot" class="brand-dot" title="Trạng thái kết nối trực tuyến"></span>
+      <div class="brand-txt">
+        <h1 id="dev-title">ESP32-CAM SMART METER &amp; AI</h1>
+        <span id="clock-str">--:--:-- | esp32-cam.local</span>
+      </div>
+    </div>
+    <div class="badges">
+      <span id="temp-badge" class="badge info">🌡️ --°C</span>
+      <span id="volt-badge" class="badge ok">⚡ 3.30V</span>
+      <span id="wifi-badge" class="badge ok">📶 -- dBm</span>
+      <span id="wg-badge" class="badge">🔒 WG: Off</span>
+      <span id="mqtt-badge" class="badge">MQTT</span>
+      <span id="sd-badge" class="badge ok">💾 SD</span>
+    </div>
+  </header>
+
+  <!-- INDUSTRIAL SAFE RESCUE BANNER -->
+  <div id="rescue-banner" style="display:none;background:rgba(239,68,68,0.18);border:1px solid #ef4444;border-radius:14px;padding:12px 16px;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <div>
+      <div style="font-weight:800;color:#f87171;font-size:13.5px">🚨 ĐANG Ở CHẾ ĐỘ CỨU HỘ CÔNG NGHIỆP (SAFE RESCUE MODE)</div>
+      <div style="font-size:11.5px;color:#fca5a5">Đã tạm ngắt Camera DMA &amp; tác vụ nặng để bảo đảm nạp OTA / Rollback an toàn 100%.</div>
+    </div>
+    <button class="btn btn-sm btn-success" onclick="toggleRescueMode(0)">✅ Thoát Cứu Hộ &amp; Khởi Động Bình Thường</button>
+  </div>
+
+  <!-- 7-PILLAR SCIENTIFIC NAVIGATION -->
+  <nav class="tabs">
+    <button class="tab-btn active" onclick="switchTab('live', this)"><span>📟</span><span>Giám Sát &amp; Cam</span></button>
+    <button class="tab-btn" onclick="switchTab('aieyes', this)"><span>👁️</span><span>Tai Mắt AI &amp; MCP</span></button>
+    <button class="tab-btn" onclick="switchTab('ai', this)"><span>🧠</span><span>AI, Cloud &amp; Giờ</span></button>
+    <button class="tab-btn" onclick="switchTab('wifi', this)"><span>🌐</span><span>Mạng &amp; VPN</span></button>
+    <button class="tab-btn" onclick="switchTab('sd', this)"><span>💾</span><span>Thẻ Nhớ &amp; Ảnh</span></button>
+    <button class="tab-btn" onclick="switchTab('health', this)"><span>🩺</span><span>Sức Khỏe &amp; OTA</span></button>
+    <button class="tab-btn" onclick="switchTab('hw', this)"><span>🧬</span><span>Hồ Sơ Phần Cứng</span></button>
+  </nav>
+
+  <!-- ===================================================================== -->
+  <!-- TAB 1: OPTICAL WORKBENCH (SPLIT-SCREEN LIVE STREAM + INSPECTOR)       -->
+  <!-- ===================================================================== -->
+  <div id="tab-live" class="tab-content active">
+    <div class="workbench-grid">
+      <!-- LEFT COLUMN: STICKY VIDEO VIEWPORT + SMART METER READOUTS -->
+      <div class="workbench-left">
+        <div class="stream-card">
+          <div class="stream-toolbar">
+            <div class="seg-group" title="Chọn chế độ luồng hình ảnh (Tối ưu cho LAN hoặc 4G/WireGuard)">
+              <button class="seg-btn active" id="mode-btn-mjpeg" onclick="setStreamMode('mjpeg')">🎥 Live MJPEG</button>
+              <button class="seg-btn" id="mode-btn-snap" onclick="setStreamMode('snap')">📸 Ảnh Tĩnh 4G/VPN</button>
+              <button class="seg-btn" id="mode-btn-pause" onclick="setStreamMode('pause')">⏸️ Tạm Ngắt (Eco)</button>
+            </div>
+            <div class="seg-group">
+              <button class="seg-btn" id="btn-draw-roi" onclick="toggleInteractiveRoi()" title="Dùng ngón tay hoặc chuột kéo trực tiếp khung ROI trên video">✋ Kéo Vẽ ROI</button>
+              <button class="seg-btn" onclick="refreshSnapshotOnce()" title="Làm mới 1 khung hình">🔄</button>
+              <button class="seg-btn" onclick="toggleFullscreenStream()" title="Phóng to toàn màn hình">⛶</button>
+            </div>
+          </div>
+
+          <div class="stream-wrap" id="stream-wrap">
+            <img id="stream-img" src="" alt="Camera Viewport">
+            <div id="roi-overlay" style="left:20%;top:25%;width:60%;height:45%">
+              <span class="roi-tag" id="roi-mode-lbl">ROI: TỔNG HỢP</span>
+              <span class="roi-tag" id="roi-led-live">LED: OFF</span>
+            </div>
+            <div class="stream-hud">
+              <span class="hud-pill" id="hud-af">AF: Sẵn sàng</span>
+              <span class="hud-pill" id="hud-ai">Motion: 0%</span>
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn btn-success" onclick="captureAll('meter_read')">🔍 Đọc Chỉ Số Ngay (AI .171)</button>
+            <button class="btn btn-primary" onclick="captureAll('all')">📸 Chụp + Lưu SD + FTP</button>
+            <button class="btn btn-accent" onclick="triggerAF()">🎯 Lấy Nét AF</button>
+          </div>
+        </div>
+
+        <!-- SMART METER & INDICATOR READOUT DASHBOARD -->
+        <div class="card">
+          <div class="card-title">
+            <span>📟 Kết Quả Đọc Chỉ Số Công Nghiệp (Đèn Báo / LED 7 Thanh / LCD)</span>
+            <span style="font-size:11px;color:var(--muted)" id="ftp-last-st">FTP: Sẵn sàng</span>
+          </div>
+          <div class="meter-grid">
+            <div class="meter-box">
+              <div class="meter-head"><span>💡 Đèn Báo (LED)</span><span id="rd-led-luma">Luma: --</span></div>
+              <div style="display:flex;align-items:center;margin-top:2px">
+                <span class="led-dot" id="rd-led-dot"></span>
+                <span class="digital-val" id="rd-led-val" style="font-size:19px">OFF</span>
+              </div>
+              <div class="metric-sub" id="rd-led-sub">Edge + Server HSV Analysis</div>
+            </div>
+
+            <div class="meter-box">
+              <div class="meter-head"><span>🔢 LED 7 Thanh</span><span id="rd-7seg-conf">7-Seg OCR</span></div>
+              <div class="digital-val" id="rd-7seg-val">----</div>
+              <div class="metric-sub" id="rd-7seg-sub">Đồng hồ nhiệt / áp suất / bộ đếm</div>
+            </div>
+
+            <div class="meter-box">
+              <div class="meter-head"><span>💧⚡🔥 Đồng Hồ LCD</span><span id="rd-lcd-unit">Nước/Điện/Khí</span></div>
+              <div class="digital-val" id="rd-lcd-val" style="color:#38bdf8">----</div>
+              <div class="metric-sub" id="rd-lcd-sub">CLAHE + NPU OCR (.171)</div>
+            </div>
+
+            <div class="meter-box" style="border-color:rgba(245,158,11,0.35)">
+              <div class="meter-head"><span>🎡 Đồng Hồ Nước Kim Quay</span><span id="rd-dial-flow" style="color:#fbbf24">Lọc Lịch Sử</span></div>
+              <div class="digital-val" id="rd-dial-val" style="color:#fbbf24">----</div>
+              <div class="metric-sub" id="rd-dial-sub">Góc kim quay + Khớp số cũ V(t-1)</div>
+            </div>
+          </div>
+
+          <!-- LIVE FLOW TREND SPARKLINE + LEAK GUARD + CSV EXPORT -->
+          <div style="margin-top:10px;background:#050811;border:1px solid #1e293b;border-radius:11px;padding:9px 12px;display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:11px;font-weight:800;color:#38bdf8;text-transform:uppercase">📈 Biểu Đồ Lưu Lượng &amp; Phát Hiện Rò Rỉ</span>
+                <span class="badge ok" id="leak-status-badge" style="font-size:10px;padding:2px 7px">✅ Đường ống kín (0.0 L/p)</span>
+              </div>
+              <div style="display:flex;gap:6px">
+                <a class="btn btn-sm" href="http://10.25.7.171:8095/api/meter/export_csv" target="_blank" style="font-size:10.5px;padding:4px 8px">📥 Xuất Báo Cáo CSV</a>
+                <a class="btn btn-sm" href="http://10.25.7.171:8095" target="_blank" style="font-size:10.5px;padding:4px 8px">🧠 Mở AI Hub ↗</a>
+              </div>
+            </div>
+            <svg id="flow-sparkline" viewBox="0 0 360 44" style="width:100%;height:44px;background:rgba(14,165,233,0.03);border-radius:6px;overflow:visible">
+              <polyline id="flow-spark-poly" fill="none" stroke="#38bdf8" stroke-width="2" points="0,38 360,38"></polyline>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN: SUB-TABBED OPTICAL & ROI INSPECTOR (NO LONG SCROLLING) -->
+      <div class="workbench-right">
+        <div class="card">
+          <div class="subtabs">
+            <button class="subtab-btn active" onclick="switchSubTab('roi', this)">🎯 Khung Ngắm ROI</button>
+            <button class="subtab-btn" onclick="switchSubTab('optics', this)">🔭 Lấy Nét &amp; ISP</button>
+            <button class="subtab-btn" onclick="switchSubTab('image', this)">🎨 Độ Nét &amp; Ảnh</button>
+          </div>
+
+          <!-- SUB-PANE 1: ROI & TARGET METER MODE -->
+          <div id="sub-roi" class="subtab-pane active">
+            <div class="ctrl-group" style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.28);padding:9px 10px;border-radius:10px;margin-bottom:8px">
+              <div class="ctrl-label">
+                <span style="color:#34d399;font-weight:800">⚡ Chuyển Đổi Mềm Đối Tượng Theo Dõi (1-Chạm NVS — Không Cần Flash OTA)</span>
+              </div>
+              <div class="btn-row" style="margin-top:5px">
+                <button class="btn btn-sm btn-success" onclick="applyTargetPreset('water_meter')">💧 Đồng Hồ Nước</button>
+                <button class="btn btn-sm btn-accent" onclick="applyTargetPreset('multi_screen')">🔄 Đa Màn Hình</button>
+                <button class="btn btn-sm btn-primary" onclick="applyTargetPreset('debug_board')">🔌 Debug Bo Mạch</button>
+                <button class="btn btn-sm" onclick="applyTargetPreset('led_status')">🚨 Đèn Báo / TX-RX</button>
+                <button class="btn btn-sm" onclick="applyTargetPreset('lcd_oled')">📟 Màn LCD / OLED</button>
+                <button class="btn btn-sm" onclick="applyTargetPreset('led_7seg')">🔢 LED 7 Thanh</button>
+              </div>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label"><span>Chế độ Đọc Mục tiêu (Target Mode)</span></div>
+              <select id="sel-meter-mode" onchange="onMeterModeChange(this.value)">
+                <option value="0">0 - Tổng hợp: Đèn báo + LED 7 thanh + LCD + Kim quay</option>
+                <option value="1">1 - Chỉ đọc Trạng thái Đèn Báo (LED ON/OFF/Màu)</option>
+                <option value="2">2 - Chỉ đọc Đồng hồ Số LED 7 Thanh</option>
+                <option value="3">3 - Chỉ đọc Màn hình LCD (Đồng hồ Nước / Điện / Khí)</option>
+                <option value="4">4 - 🎡 Đồng hồ Nước Kim Quay (4 Vòng tròn + Số cơ + Lọc lịch sử)</option>
+                <option value="5">5 - 🔄 Đồng hồ Đa Màn Hình Chuyển Vòng (Tự tách từng trang chỉ số OBIS/Đơn vị)</option>
+              </select>
+            </div>
+
+            <div class="ctrl-group" style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);padding:9px 10px;border-radius:10px">
+              <div class="ctrl-label">
+                <span style="color:#fbbf24">📌 Căn Chuẩn Số Gốc V(t-1) (Khử đọc nhầm Kim/Số lửng)</span>
+                <span id="lbl-next-cap" style="color:#34d399">Chu kỳ: Tắt</span>
+              </div>
+              <div style="display:flex;gap:6px;margin-top:3px">
+                <input type="text" id="inp-meter-base" placeholder="VD: 00125.432 (m³)" style="flex:1;font-family:monospace">
+                <button class="btn btn-sm btn-primary" onclick="saveMeterBaseline()">📌 Gán Số Gốc</button>
+              </div>
+              <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
+                <select id="sel-cycle-preset" style="flex:1;min-width:140px" onchange="onCyclePresetChange(this.value)">
+                  <option value="0">⏱️ Chu kỳ đọc: Tắt tự động</option>
+                  <option value="15">⏱️ Chu kỳ đọc: Mỗi 15 giây (Test nhanh)</option>
+                  <option value="30">⏱️ Chu kỳ đọc: Mỗi 30 giây</option>
+                  <option value="60">⏱️ Chu kỳ đọc: Mỗi 1 phút</option>
+                  <option value="300">⏱️ Chu kỳ đọc: Mỗi 5 phút (Khuyên dùng)</option>
+                  <option value="900">⏱️ Chu kỳ đọc: Mỗi 15 phút</option>
+                  <option value="1800">⏱️ Chu kỳ đọc: Mỗi 30 phút</option>
+                  <option value="3600">⏱️ Chu kỳ đọc: Mỗi 1 giờ</option>
+                  <option value="21600">⏱️ Chu kỳ đọc: Mỗi 6 giờ</option>
+                  <option value="86400">⏱️ Chu kỳ đọc: Mỗi 24 giờ (1 ngày/lần)</option>
+                </select>
+                <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
+                  <input type="checkbox" id="chk-adaptive-cycle" checked onchange="setCamCtrl('adaptive_cycle', this.checked ? 1 : 0)">
+                  ⚡ Tăng tốc (30s) khi nước chảy
+                </label>
+              </div>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label">
+                <span>Mẫu Khung Ngắm Nhanh (ROI Preset)</span>
+                <span style="color:#34d399;cursor:pointer" onclick="toggleInteractiveRoi()">✋ Bấm để vẽ trực tiếp trên ảnh</span>
+              </div>
+              <div class="btn-row">
+                <button class="btn btn-sm" onclick="setRoiPreset(15,30,70,35)">🔢 Dải Số Ngang</button>
+                <button class="btn btn-sm" onclick="setRoiPreset(35,35,30,30)">💡 Tâm Đèn Báo</button>
+                <button class="btn btn-sm" onclick="setRoiPreset(20,20,60,60)">📟 Toàn Mặt Đồng Hồ</button>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <div class="ctrl-group">
+                <div class="ctrl-label"><span>Vị trí Ngang X (%)</span><span id="lbl-rx">20%</span></div>
+                <input type="range" id="rng-rx" min="0" max="85" value="20" oninput="updateRoiBox()" onchange="setCamCtrl('roi_x', this.value)">
+              </div>
+              <div class="ctrl-group">
+                <div class="ctrl-label"><span>Vị trí Dọc Y (%)</span><span id="lbl-ry">25%</span></div>
+                <input type="range" id="rng-ry" min="0" max="85" value="25" oninput="updateRoiBox()" onchange="setCamCtrl('roi_y', this.value)">
+              </div>
+              <div class="ctrl-group">
+                <div class="ctrl-label"><span>Chiều Rộng W (%)</span><span id="lbl-rw">60%</span></div>
+                <input type="range" id="rng-rw" min="10" max="100" value="60" oninput="updateRoiBox()" onchange="setCamCtrl('roi_w', this.value)">
+              </div>
+              <div class="ctrl-group">
+                <div class="ctrl-label"><span>Chiều Cao H (%)</span><span id="lbl-rh">45%</span></div>
+                <input type="range" id="rng-rh" min="10" max="100" value="45" oninput="updateRoiBox()" onchange="setCamCtrl('roi_h', this.value)">
+              </div>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label">
+                <span>🔄 Bù Góc Lắp Nghiêng Đồng Hồ (Deskew Rotation: -180° ➔ +180°)</span>
+                <span id="lbl-rot-deg" style="color:#38bdf8;font-weight:800">0°</span>
+              </div>
+              <input type="range" id="rng-rot-deg" min="-180" max="180" value="0"
+                     oninput="previewRotationDeg(this.value)"
+                     onchange="setCamCtrl('meter_rot_deg', this.value)">
+              <div class="btn-row" style="margin-top:4px">
+                <button class="btn btn-sm" onclick="setRotPreset(0)">0° Chuẩn</button>
+                <button class="btn btn-sm" onclick="setRotPreset(-90)">↺ -90°</button>
+                <button class="btn btn-sm" onclick="setRotPreset(90)">↻ +90°</button>
+                <button class="btn btn-sm" onclick="setRotPreset(180)">⇅ 180°</button>
+              </div>
+            </div>
+
+            <div class="btn-row" style="margin-top:4px">
+              <button class="btn btn-primary" onclick="saveRoiConfig()">💾 Lưu Tọa Độ Khung ROI Vào Bộ Nhớ NVS</button>
+            </div>
+          </div>
+
+          <!-- SUB-PANE 2: VCM FOCUS & INDUSTRIAL ISP PROFILES -->
+          <div id="sub-optics" class="subtab-pane">
+            <div class="ctrl-group">
+              <div class="ctrl-label">
+                <span>Tiêu cự Thấu kính VCM (0=Vô cực ➔ 1023=Siêu gần)</span>
+                <span id="lbl-focus" style="color:#38bdf8;font-weight:800">512</span>
+              </div>
+              <input type="range" id="rng-focus" min="0" max="1023" value="512"
+                     oninput="document.getElementById('lbl-focus').textContent=this.value"
+                     onchange="setCamCtrl('focus', this.value)">
+            </div>
+
+            <div class="btn-row" style="margin-bottom:6px">
+              <button class="btn btn-sm" onclick="setFocusPreset(0)">⛰️ Vô cực (0)</button>
+              <button class="btn btn-sm" onclick="setFocusPreset(300)">🏢 Xa (300)</button>
+              <button class="btn btn-sm" onclick="setFocusPreset(550)">🧍 Vừa (550)</button>
+              <button class="btn btn-sm" onclick="setFocusPreset(820)">📟 Đồng hồ (820)</button>
+              <button class="btn btn-sm" onclick="setFocusPreset(950)">🔬 Macro (950)</button>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label"><span>Chế độ Quang học Công nghiệp (ISP Optical Profile)</span></div>
+              <select id="sel-isp-profile" onchange="setCamCtrl('isp_profile', this.value); setTimeout(loadConfig, 400)">
+                <option value="0">0 - Chuẩn Tự Động (Balanced Auto)</option>
+                <option value="1">1 - Đọc Số LED 7 Thanh &amp; Đèn Báo (Chống lóa Anti-Blooming)</option>
+                <option value="2">2 - Đọc Đồng Hồ LCD Nước/Điện/Khí (Tương phản cao Anti-Glare)</option>
+                <option value="3">3 - Tủ Kỹ Thuật Tối / Ban Đêm (Night AEC2 Boost)</option>
+                <option value="4">4 - 🎡 Đồng Hồ Nước Kim Quay (Tăng sắc Đỏ kim + Chống lóa kính)</option>
+              </select>
+            </div>
+
+            <!-- AUXILIARY FLASH LED (GPIO 4 PWM) ANTI-GLARE FILL LIGHT -->
+            <div class="ctrl-group" style="background:rgba(14,165,233,0.06);border:1px solid rgba(14,165,233,0.25);padding:9px 10px;border-radius:10px">
+              <div class="ctrl-label">
+                <span style="color:#38bdf8">💡 Đèn LED Phụ Trợ Sáng Chống Lóa (GPIO 4 PWM)</span>
+                <span id="lbl-flash-st" style="color:#fbbf24">PWM: 0%</span>
+              </div>
+              <select id="sel-flash-mode" onchange="setCamCtrl('flash_mode', this.value)" style="margin:4px 0">
+                <option value="0">0 - Tắt nháy tự động (Chỉ bật soi thủ công)</option>
+                <option value="1" selected>1 - Tự động bật đèn phụ khi tối (ROI Luma &lt; 88)</option>
+                <option value="2">2 - Luôn bật đèn phụ chống lóa (350ms AE/AWB) trước khi chụp</option>
+              </select>
+              <div class="form-grid" style="margin-top:4px">
+                <div class="ctrl-group" style="margin:0">
+                  <div class="ctrl-label"><span>Độ sáng khi Chụp (Chống lóa)</span><span id="lbl-flash-cap">22% (55)</span></div>
+                  <input type="range" id="rng-flash-cap" min="15" max="255" value="55"
+                         oninput="document.getElementById('lbl-flash-cap').textContent=Math.round(this.value*100/255)+'% ('+this.value+')'"
+                         onchange="setCamCtrl('flash_cap_duty', this.value)">
+                </div>
+                <div class="ctrl-group" style="margin:0">
+                  <div class="ctrl-label"><span>Đèn Soi Liên Tục (Torch)</span><span id="lbl-flash-torch">0%</span></div>
+                  <input type="range" id="rng-flash-torch" min="0" max="255" value="0"
+                         oninput="document.getElementById('lbl-flash-torch').textContent=Math.round(this.value*100/255)+'%'"
+                         onchange="setCamCtrl('flash_duty', this.value)">
+                </div>
+              </div>
+              <div class="btn-row" style="margin-top:6px">
+                <button class="btn btn-sm" onclick="setFlashTorch(0)">🌑 Tắt (0%)</button>
+                <button class="btn btn-sm" onclick="setFlashTorch(45)">🕯️ Dịu (18%)</button>
+                <button class="btn btn-sm" onclick="setFlashTorch(85)">💡 Chống lóa (33%)</button>
+                <button class="btn btn-sm" onclick="setFlashTorch(180)">🔦 Mạnh (70%)</button>
+              </div>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label"><span>Cân bằng trắng (White Balance AWB)</span></div>
+              <select id="sel-wb-mode" onchange="setCamCtrl('wb_mode', this.value)">
+                <option value="0">0 - Tự động (Auto AWB)</option>
+                <option value="1">1 - Ánh nắng (Sunny)</option>
+                <option value="2">2 - Nhiều mây (Cloudy)</option>
+                <option value="3">3 - Đèn huỳnh quang / Tủ điện (Office)</option>
+                <option value="4">4 - Đèn sợi đốt ấm (Home)</option>
+              </select>
+            </div>
+
+            <div class="switch-row">
+              <span>❄️ Chế độ Chống Nóng (Eco Thermal: 10MHz XCLK + Ngắt cuộn VCM &amp; Ngủ Standby)</span>
+              <input type="checkbox" id="cfg-eco-en" checked onchange="setCamCtrl('eco_mode', this.checked ? 1 : 0)">
+            </div>
+
+            <div class="btn-row" style="margin-top:4px">
+              <button class="btn btn-accent" onclick="triggerAF()">🎯 Lấy Nét AF</button>
+              <button class="btn btn-success" onclick="runRoiFocusSweep()" title="Quét tự động tìm vị trí VCM có độ sắc nét chữ số cao nhất trong khung ROI">🔬 Quét Đỉnh Nét ROI</button>
+              <button class="btn btn-sm" onclick="setCamCtrl('cam_recover', 1)">🔧 Reset Camera</button>
+            </div>
+          </div>
+
+          <!-- SUB-PANE 3: RESOLUTION, JPEG QUALITY & IMAGE TUNING -->
+          <div id="sub-image" class="subtab-pane">
+            <div class="form-grid">
+              <div class="ctrl-group">
+                <div class="ctrl-label"><span>Độ phân giải (Resolution)</span></div>
+                <select id="sel-framesize" onchange="setCamCtrl('framesize', this.value)">
+                  <option value="6">QVGA (320x240)</option>
+                  <option value="10" selected>VGA (640x480 - Khuyên dùng)</option>
+                  <option value="11">SVGA (800x600)</option>
+                  <option value="12">XGA (1024x768)</option>
+                  <option value="13">HD (1280x720)</option>
+                  <option value="15">UXGA (1600x1200)</option>
+                </select>
+              </div>
+
+              <div class="ctrl-group">
+                <div class="ctrl-label"><span>Nén JPEG (4=Siêu nét, 63=Nhẹ)</span><span id="lbl-qual">12</span></div>
+                <input type="range" id="rng-qual" min="4" max="63" value="12"
+                       oninput="document.getElementById('lbl-qual').textContent=this.value"
+                       onchange="setCamCtrl('quality', this.value)">
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <div class="ctrl-group">
+                <div class="ctrl-label"><span>Độ sáng (Brightness)</span><span id="lbl-bright">0</span></div>
+                <input type="range" id="rng-bright" min="-2" max="2" value="0"
+                       oninput="document.getElementById('lbl-bright').textContent=this.value"
+                       onchange="setCamCtrl('brightness', this.value)">
+              </div>
+              <div class="ctrl-group">
+                <div class="ctrl-label"><span>Độ tương phản (Contrast)</span><span id="lbl-contrast">0</span></div>
+                <input type="range" id="rng-contrast" min="-2" max="2" value="0"
+                       oninput="document.getElementById('lbl-contrast').textContent=this.value"
+                       onchange="setCamCtrl('contrast', this.value)">
+              </div>
+              <div class="ctrl-group">
+                <div class="ctrl-label"><span>Độ sắc nét (Sharpness)</span><span id="lbl-sharp">1</span></div>
+                <input type="range" id="rng-sharp" min="-2" max="2" value="1"
+                       oninput="document.getElementById('lbl-sharp').textContent=this.value"
+                       onchange="setCamCtrl('sharpness', this.value)">
+              </div>
+              <div class="ctrl-group">
+                <div class="ctrl-label"><span>Khử nhiễu (Denoise)</span><span id="lbl-denoise">1</span></div>
+                <input type="range" id="rng-denoise" min="0" max="8" value="1"
+                       oninput="document.getElementById('lbl-denoise').textContent=this.value"
+                       onchange="setCamCtrl('denoise', this.value)">
+              </div>
+            </div>
+
+            <div class="btn-row">
+              <button class="btn btn-sm" onclick="toggleMirror('hmirror')">↔️ Lật Ngang (H-Mirror)</button>
+              <button class="btn btn-sm" onclick="toggleMirror('vflip')">↕️ Lật Dọc (V-Flip)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- TAB 2: AI PIPELINE, CLOUD TELEMETRY & NTP/OSD TIME                    -->
+  <!-- ===================================================================== -->
+  <div id="tab-ai" class="tab-content">
+    <!-- Pipeline Flow Summary -->
+    <div class="card">
+      <div class="card-title">
+        <span>⚡ Luồng Xử Lý Dữ Liệu Công Nghiệp (End-to-End Telemetry Pipeline)</span>
+        <button class="btn btn-sm btn-primary" onclick="saveFullConfig()">💾 Lưu Toàn Bộ Cấu Hình AI &amp; Cloud</button>
+      </div>
+      <div class="pipe-bar">
+        <div class="pipe-step"><b>1. Cảm biến &amp; OSD</b><span id="pipe-cam-st">OV5640 + Timestamp</span></div>
+        <div class="pipe-step"><b>2. Edge AI (ESP32)</b><span id="pipe-edge-st">Motion &amp; ROI Luma</span></div>
+        <div class="pipe-step"><b>3. FTP Server (.171)</b><span id="pipe-ftp-st">Sẵn sàng</span></div>
+        <div class="pipe-step"><b>4. Server AI (.171)</b><span id="pipe-ai-st">RK3576 OCR Engine</span></div>
+        <div class="pipe-step"><b>5. MQTT &amp; Ntfy</b><span id="pipe-mq-st">Real-time Alert</span></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- AI Result & Edge AI Config -->
+      <div class="card">
+        <div class="card-title">
+          <span>🧠 Kết Quả Server AI (10.25.7.171) &amp; Cấu Hình Edge AI</span>
+          <a href="http://10.25.7.171:8095" target="_blank" style="color:#38bdf8;font-size:11px">Mở AI Hub ↗</a>
+        </div>
+        <pre id="ai-json-box" style="background:#050811;padding:10px;border-radius:10px;font-size:11.5px;color:#34d399;overflow-x:auto;max-height:170px;margin:0 0 10px 0">Đang chờ dữ liệu phân tích...</pre>
+
+        <div class="switch-row">
+          <span>Bật Edge AI tại biên (Phát hiện chuyển động, Đo nét &amp; Đọc nhanh Đèn báo)</span>
+          <input type="checkbox" id="cfg-edge-en" checked>
+        </div>
+        <div class="switch-row">
+          <span>Vẽ khung ngắm ROI màu xanh lên ảnh chụp (OSD ROI Box)</span>
+          <input type="checkbox" id="cfg-roi-osd" checked>
+        </div>
+        <div class="switch-row">
+          <span>Tự động Chụp + Đẩy FTP/AI khi phát hiện chuyển động vượt ngưỡng</span>
+          <input type="checkbox" id="cfg-edge-trig">
+        </div>
+        <div class="form-grid" style="margin-top:8px">
+          <div class="ctrl-group">
+            <div class="ctrl-label"><span>Ngưỡng chuyển động Edge AI (%)</span></div>
+            <input type="number" id="cfg-edge-thresh" value="20" min="1" max="100">
+          </div>
+          <div class="ctrl-group">
+            <div class="ctrl-label"><span>Chu kỳ tự động chụp định kỳ (Giây, 0=Tắt)</span></div>
+            <input type="number" id="cfg-auto-sec" value="0" min="0" max="86400">
+          </div>
+        </div>
+        <div class="ctrl-group">
+          <div class="ctrl-label"><span>URL Server AI Phân tích Chuyên sâu (10.25.7.171)</span></div>
+          <input type="text" id="cfg-ai-url" value="http://10.25.7.171:8095/api/analyze">
+        </div>
+      </div>
+
+      <!-- Time Sync & OSD Stamp (Merged into Pipeline Tab) -->
+      <div class="card">
+        <div class="card-title"><span>🕒 Đồng Bộ Thời Gian Thực (NTP / Web) &amp; Nhãn Ảnh OSD</span></div>
+        <div class="metric" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div>
+            <div class="metric-lbl">Thời gian hệ thống ESP32 (Chuẩn TAI64N / OSD)</div>
+            <div class="metric-val" id="time-now-big" style="font-size:20px;color:#38bdf8;font-family:monospace">--:--:--</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm btn-success" onclick="syncPhoneTime()">📱 Đồng bộ từ Điện thoại</button>
+            <button class="btn btn-sm btn-accent" onclick="triggerNtpSync()">🌐 Đồng bộ NTP</button>
+          </div>
+        </div>
+
+        <div class="switch-row">
+          <span>Gắn nhãn Thời gian &amp; Tên thiết bị trực tiếp lên ảnh chụp (OSD Timestamp Tag)</span>
+          <input type="checkbox" id="cfg-osd-en" checked>
+        </div>
+
+        <div class="form-grid" style="margin-top:10px">
+          <div class="ctrl-group">
+            <div class="ctrl-label"><span>Máy chủ NTP (NTP Server)</span></div>
+            <input type="text" id="cfg-ntp-srv" value="pool.ntp.org">
+          </div>
+          <div class="ctrl-group">
+            <div class="ctrl-label"><span>Múi giờ POSIX (Việt Nam GMT+7 = ICT-7)</span></div>
+            <input type="text" id="cfg-tz" value="ICT-7">
+          </div>
+        </div>
+
+        <div class="card-title" style="margin-top:14px"><span>📤 Cấu Hình FTP Server (Lưu Ảnh Gốc Về Server .171)</span></div>
+        <div class="switch-row">
+          <span>Bật tự động đẩy ảnh qua FTP khi chụp</span>
+          <input type="checkbox" id="cfg-ftp-en" checked>
+        </div>
+        <div class="form-grid" style="margin-top:8px">
+          <div class="ctrl-group"><div class="ctrl-label"><span>FTP Host</span></div><input type="text" id="cfg-ftp-host" value="10.25.7.171"></div>
+          <div class="ctrl-group"><div class="ctrl-label"><span>FTP Port</span></div><input type="number" id="cfg-ftp-port" value="21"></div>
+          <div class="ctrl-group"><div class="ctrl-label"><span>FTP User</span></div><input type="text" id="cfg-ftp-user" value="nxchieu"></div>
+          <div class="ctrl-group"><div class="ctrl-label"><span>FTP Password</span></div><input type="password" id="cfg-ftp-pass" value="123"></div>
+        </div>
+        <div class="ctrl-group">
+          <div class="ctrl-label"><span>Thư mục lưu trên FTP Server</span></div>
+          <input type="text" id="cfg-ftp-dir" value="/var/ftp/esp32cam">
+        </div>
+      </div>
+    </div>
+
+    <!-- MQTT & Ntfy Card -->
+    <div class="card">
+      <div class="card-title"><span>📡 Cấu Hình MQTT Real-time Telemetry &amp; Thông Báo Đẩy Ntfy</span></div>
+      <div class="grid-2">
+        <div>
+          <div class="switch-row">
+            <span>Bật kết nối MQTT Real-time Telemetry &amp; Nhận lệnh từ xa</span>
+            <input type="checkbox" id="cfg-mqtt-en" checked>
+          </div>
+          <div class="form-grid" style="margin-top:8px">
+            <div class="ctrl-group"><div class="ctrl-label"><span>MQTT Broker URI</span></div><input type="text" id="cfg-mqtt-uri" value="mqtt://10.25.7.171:1883"></div>
+            <div class="ctrl-group"><div class="ctrl-label"><span>Topic Prefix</span></div><input type="text" id="cfg-mqtt-prefix" value="esp32cam"></div>
+            <div class="ctrl-group"><div class="ctrl-label"><span>Chu kỳ gửi (Giây)</span></div><input type="number" id="cfg-mqtt-int" value="5" min="1" max="300"></div>
+          </div>
+        </div>
+        <div>
+          <div class="switch-row">
+            <span>Bật thông báo đẩy Ntfy khi chụp / phát hiện sự kiện</span>
+            <input type="checkbox" id="cfg-ntfy-en" checked>
+          </div>
+          <div class="ctrl-group" style="margin-top:8px">
+            <div class="ctrl-label"><span>Ntfy Topic URL</span></div>
+            <input type="text" id="cfg-ntfy-url" value="http://10.25.7.116:8092/esp32cam">
+          </div>
+          <div class="btn-row" style="margin-top:10px">
+            <button class="btn btn-primary" onclick="saveFullConfig()">💾 Lưu Cấu Hình Cloud &amp; AI</button>
+            <button class="btn" onclick="testNtfy()">🔔 Gửi Thử Ntfy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- TAB 3: NETWORK, 5 WIFI PROFILES & WIREGUARD VPN                       -->
+  <!-- ===================================================================== -->
+  <div id="tab-wifi" class="tab-content">
+    <div class="grid-2">
+      <!-- Industrial WireGuard VPN Tunnel Card -->
+      <div class="card">
+        <div class="card-title">
+          <span>🔒 Đường Hầm WireGuard VPN Công Nghiệp (Xuyên NAT / 4G LTE)</span>
+          <span class="badge info" id="wg-status-pill">MTU: 1360</span>
+        </div>
+        <div class="switch-row">
+          <span>Bật Kết nối WireGuard Tự động (Split-Tunnel + DDNS Watchdog + TAI64N)</span>
+          <input type="checkbox" id="wg-enable-chk" onchange="toggleWgEnabled(this.checked)">
+        </div>
+        <div class="form-grid" style="margin:8px 0">
+          <div class="metric">
+            <div class="metric-lbl">IP VPN &amp; Phân Vùng Bền Vững (Vault)</div>
+            <div class="metric-val" id="wg-ip-txt" style="font-size:15px">10.212.156.7</div>
+            <div class="metric-sub" id="wg-peer-txt">Peer: nxchieu.duckdns.org:51820</div>
+            <div class="metric-sub" id="wg-vault-txt" style="color:#34d399;font-weight:700">🛡️ Vault: vpn_vault @ 0x3FC000 (A/B)</div>
+          </div>
+          <div class="metric">
+            <div class="metric-lbl">Nạp nhanh từ File (.conf)</div>
+            <input type="file" accept=".conf,.txt" onchange="loadWgConfFile(this)" style="margin-top:4px;font-size:11px;padding:4px">
+            <div class="metric-sub">Chuẩn [Interface] &amp; [Peer]</div>
+          </div>
+        </div>
+        <div class="ctrl-group">
+          <div class="ctrl-label">
+            <span>Cấu hình WireGuard (.conf)</span>
+            <span style="color:#38bdf8">ChaCha20-Poly1305 / X25519</span>
+          </div>
+          <textarea id="wg-conf-text" rows="7" style="font-family:monospace;font-size:11.5px;color:#34d399" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.212.156.7/24&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = nxchieu.duckdns.org:51820"></textarea>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-success" onclick="saveWgConfig()">🔒 Lưu .conf &amp; Kết Nối WireGuard</button>
+          <button class="btn btn-sm" onclick="loadWgConfig()">🔄 Đọc Lại</button>
+        </div>
+      </div>
+
+      <!-- Live Network & Service Status Table -->
+      <div class="card">
+        <div class="card-title">
+          <span>🌐 Chi Tiết Địa Chỉ IP, Định Tuyến &amp; Dịch Vụ Mạng</span>
+          <span class="badge ok" id="h-ping-badge">Ping: -- ms</span>
+        </div>
+        <table class="info-table">
+          <tr><td>Địa chỉ IPv4 (LAN)</td><td id="h-net-ip">0.0.0.0</td></tr>
+          <tr><td>Subnet Mask / Gateway</td><td id="h-net-gw">0.0.0.0</td></tr>
+          <tr><td>DNS Server</td><td id="h-net-dns">8.8.8.8</td></tr>
+          <tr><td>Địa chỉ MAC (WiFi STA)</td><td id="h-net-mac">--:--:--:--:--:--</td></tr>
+          <tr><td>Tên miền mDNS nội bộ</td><td id="h-net-mdns">esp32-cam.local</td></tr>
+          <tr><td>Đường hầm WireGuard VPN</td><td id="h-net-wg">Đang kiểm tra...</td></tr>
+          <tr><td>Mạng WiFi Đang kết nối</td><td id="h-net-ssid">HA (Ưu tiên #1)</td></tr>
+          <tr><td>BSSID Trạm phát (AP MAC)</td><td id="h-net-bssid">--:--:--:--:--:--</td></tr>
+          <tr><td>Cường độ sóng (RSSI / Kênh)</td><td id="h-net-rssi">-- dBm</td></tr>
+          <tr><td>MQTT Broker (.171:1883)</td><td id="h-svc-mqtt">--</td></tr>
+          <tr><td>FTP Upload (.171) / Ntfy (.116)</td><td id="h-svc-ftp">--</td></tr>
+        </table>
+        <span id="h-net-mask" style="display:none"></span>
+        <span id="h-svc-ntfy" style="display:none"></span>
+      </div>
+    </div>
+
+    <!-- 5 Priority WiFi Profiles Card -->
+    <div class="card">
+      <div class="card-title">
+        <span>📶 Quản Lý 5 Mạng WiFi Ưu Tiên (Smart Roaming) &amp; Định Danh Thiết Bị</span>
+        <button class="btn btn-sm btn-accent" onclick="scanWifi()">🔍 Quét Sóng WiFi Xung Quanh</button>
+      </div>
+      <div id="wifi-scan-box" style="display:none;margin-bottom:10px;padding:10px;background:#050811;border-radius:10px;font-size:12px;border:1px solid var(--border)"></div>
+
+      <div class="form-grid" style="margin-bottom:12px">
+        <div class="ctrl-group">
+          <div class="ctrl-label"><span>Tên miền mDNS (truy cập: tên.local)</span></div>
+          <input type="text" id="cfg-mdns" value="esp32-cam">
+        </div>
+        <div class="ctrl-group">
+          <div class="ctrl-label"><span>Tên hiển thị Thiết bị (OSD &amp; Web)</span></div>
+          <input type="text" id="cfg-devname" value="ESP32-CAM Smart AI">
+        </div>
+      </div>
+
+      <div id="wifi-slots-container" class="grid-2"></div>
+
+      <div class="switch-row" style="margin-top:6px">
+        <span>Luôn bật Trạm phát WiFi AP Cứu hộ (SSID: ESP32-CAM-Config / Pass: 12345678)</span>
+        <input type="checkbox" id="cfg-ap-on">
+      </div>
+
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn btn-primary" onclick="saveFullConfig()">💾 Lưu Cấu Hình 5 WiFi &amp; mDNS</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- TAB 4: MICROSD CARD STORAGE & IMAGE GALLERY WITH LIGHTBOX             -->
+  <!-- ===================================================================== -->
+  <div id="tab-sd" class="tab-content">
+    <div class="card">
+      <div class="card-title">
+        <span>💾 Quản Lý Thẻ Nhớ MicroSD &amp; Cơ Chế Ghi Xoay Vòng (Ring-Buffer)</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="loadSdFiles()">🔄 Làm mới</button>
+          <button class="btn btn-sm btn-accent" onclick="pruneSdFiles()">♻️ Dọn 5 Ảnh Cũ Nhất</button>
+          <button class="btn btn-sm btn-danger" onclick="formatSdCard()">🧹 Format Thẻ (FAT32 100%)</button>
+        </div>
+      </div>
+
+      <div class="metric" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+          <span class="metric-lbl" id="sd-cap-lbl">Dung lượng Thẻ nhớ MicroSD (SU16G)</span>
+          <span style="font-size:12px;font-weight:800;color:#34d399" id="sd-cap-summary">-- GB trống / -- GB</span>
+        </div>
+        <div class="pbar-wrap"><div class="pbar-fill" id="sd-cap-bar" style="width:10%"></div></div>
+      </div>
+
+      <div class="grid-2" style="margin-bottom:10px">
+        <div class="switch-row">
+          <span>Tự động lưu ảnh chụp (.jpg) vào Thẻ nhớ MicroSD</span>
+          <input type="checkbox" id="cfg-sd-en" checked onchange="saveFullConfig()">
+        </div>
+        <div class="switch-row">
+          <span>♻️ Tự xóa xoay vòng ảnh cũ khi thẻ còn trống dưới 200MB</span>
+          <input type="checkbox" id="cfg-sd-prune" checked onchange="setCamCtrl('sd_auto_prune', this.checked ? 1 : 0)">
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+        <div class="seg-group">
+          <button class="seg-btn active" id="sd-flt-all" onclick="setSdFilter('all')">Tất cả</button>
+          <button class="seg-btn" id="sd-flt-file" onclick="setSdFilter('file')">🖼️ Chỉ Ảnh Chụp</button>
+          <button class="seg-btn" id="sd-flt-dir" onclick="setSdFilter('dir')">📁 Thư Mục Cũ</button>
+        </div>
+        <span style="font-size:11.5px;color:var(--muted)" id="sd-count-lbl">0 mục</span>
+      </div>
+
+      <div id="sd-file-list" class="file-grid">
+        <div style="color:var(--muted);font-size:13px">Đang tải danh sách tệp trên thẻ nhớ...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- TAB 5: SYSTEM HEALTH, FREERTOS PROFILER & DUAL-OTA CENTER             -->
+  <!-- ===================================================================== -->
+  <div id="tab-health" class="tab-content">
+    <!-- Top 4 Vital Health Cards -->
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-lbl">🌡️ Nhiệt Độ Vi Xử Lý (MCU TSENS)</div>
+        <div class="metric-val" id="h-temp-val">--.- °C</div>
+        <div class="pbar-wrap"><div class="pbar-fill" id="h-temp-bar" style="width:45%"></div></div>
+        <div class="metric-sub" id="h-cam-thermal">Camera: OV5640 Eco (10MHz)</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-lbl">⚡ Điện Áp Nguồn &amp; Chuẩn eFuse</div>
+        <div class="metric-val" id="h-volt-val">3.30 V</div>
+        <div class="pbar-wrap"><div class="pbar-fill" style="width:92%"></div></div>
+        <div class="metric-sub" id="h-vref-sub">eFuse ADC Vref: ---- mV</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-lbl">⚙️ Tải CPU Dual-Core (@ 160MHz)</div>
+        <div class="metric-val" id="h-cpu-val">--.- %</div>
+        <div class="pbar-wrap"><div class="pbar-fill" id="h-cpu-bar" style="width:15%"></div></div>
+        <div class="metric-sub" id="h-cpu-cores">Core 0: --% | Core 1: --%</div>
+      </div>
+
+      <div class="metric">
+        <div class="metric-lbl">⏱️ Thời Gian Chạy (Uptime &amp; Reset)</div>
+        <div class="metric-val" id="h-uptime-val">00:00:00</div>
+        <div class="pbar-wrap"><div class="pbar-fill" style="width:100%"></div></div>
+        <div class="metric-sub" id="h-reset-reason">Reset: Power-On Reset</div>
+      </div>
+    </div>
+
+    <!-- Memory Diagnostics -->
+    <div class="card">
+      <div class="card-title"><span>🧠 Phân Bổ Bộ Nhớ: Internal SRAM, External PSRAM &amp; MicroSD</span></div>
+      <div class="form-grid">
+        <div class="metric">
+          <div class="metric-lbl">Internal SRAM (Bộ nhớ Trong)</div>
+          <div class="metric-val" id="h-ram-txt">-- / -- KB</div>
+          <div class="pbar-wrap"><div class="pbar-fill" id="h-ram-bar" style="width:40%"></div></div>
+          <div class="metric-sub" id="h-ram-min">Min Free: -- KB | Largest: -- KB</div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-lbl">External PSRAM (SPIRAM 8MB / 4MB Mapped)</div>
+          <div class="metric-val" id="h-psram-txt">-- / -- MB</div>
+          <div class="pbar-wrap"><div class="pbar-fill" id="h-psram-bar" style="width:10%"></div></div>
+          <div class="metric-sub" id="h-psram-min">Min Free: -- MB | Framebuffer &amp; AI</div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-lbl">Thẻ nhớ MicroSD (SDMMC 1-Bit)</div>
+          <div class="metric-val" id="h-sd-txt">-- / -- GB</div>
+          <div class="pbar-wrap"><div class="pbar-fill" id="h-sd-bar" style="width:5%"></div></div>
+          <div class="metric-sub" id="h-sd-sub">Tên thẻ: SU16G</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Industrial Hardware Bus, Pipeline SLA & Stack Watermark -->
+      <div class="card">
+        <div class="card-title">
+          <span>🏭 Giám Sát Phần Cứng Công Nghiệp: SCCB/I²C, SLA &amp; CoreDump</span>
+          <button class="btn btn-sm btn-accent" onclick="setCamCtrl('cam_recover', 1)">🔧 Phục Hồi Bus Camera</button>
+        </div>
+        <table class="info-table">
+          <tr><td>Bus Camera SCCB/I²C (0x300A)</td><td id="h-cam-i2c">0x5640 OK ✅</td></tr>
+          <tr><td>Số lần Tự phục hồi Camera (PWDN)</td><td id="h-cam-rec">0 lần</td></tr>
+          <tr><td>Chế độ Quang học (ISP Profile)</td><td id="h-isp-prof">Chuẩn Tự Động</td></tr>
+          <tr><td>Độ trễ Pipeline Chụp + OSD + AI</td><td id="h-cap-lat">-- ms</td></tr>
+          <tr><td>Thống kê I/O Thẻ SD &amp; FTP</td><td id="h-io-sla">SD OK: 0 | FTP OK: 0</td></tr>
+          <tr><td>Đáy Stack FreeRTOS Thấp nhất</td><td id="h-min-stack">-- bytes</td></tr>
+          <tr><td>Bộ nhớ Cứu hộ CoreDump (0x3F0000)</td><td id="h-coredump-st">Sạch (0 lỗi Panic)</td></tr>
+          <tr><td>Vòng lặp Thẻ nhớ (Ring-Buffer)</td><td id="h-sd-ring">Tự xóa khi &lt; 200MB</td></tr>
+        </table>
+      </div>
+
+      <!-- Dual-OTA & Rescue Center -->
+      <div class="card">
+        <div class="card-title">
+          <span>🛡️ Quy Hoạch 4MB Flash, Cập Nhật Dual-OTA &amp; Mode Cứu Hộ</span>
+          <span class="badge ok" id="h-wdt-badge">TWDT 25s: Active ✅</span>
+        </div>
+
+        <div style="margin-bottom:10px">
+          <div class="ctrl-label" style="margin-bottom:4px">
+            <span>Sơ đồ 4MB Flash (Dual OTA A/B + CoreDump + VPN Vault)</span>
+            <span id="h-part-summary" style="color:#34d399">ota_0 ➔ ota_1</span>
+          </div>
+          <div style="display:flex;height:22px;border-radius:7px;overflow:hidden;font-size:10px;font-weight:700;text-align:center;line-height:22px;border:1px solid rgba(255,255,255,0.12)">
+            <div style="width:6%;background:#334155;color:#cbd5e1" title="Bootloader + Partition Table (36KB)">BOOT</div>
+            <div style="width:4%;background:#475569;color:#e2e8f0" title="NVS + otadata (28KB)">NVS</div>
+            <div id="bar-ota0" style="width:41%;background:linear-gradient(90deg,#059669,#10b981);color:#fff" title="ota_0 @ 0x10000 (1984KB)">OTA_0 (1984K)</div>
+            <div id="bar-ota1" style="width:41%;background:#1e293b;color:#94a3b8" title="ota_1 @ 0x200000 (1984KB)">OTA_1 (1984K)</div>
+            <div style="width:4%;background:#7c2d12;color:#fdba74" title="CoreDump @ 0x3F0000 (48KB)">DUMP</div>
+            <div style="width:4%;background:#4f46e5;color:#e0e7ff" title="VPN &amp; WiFi Persistent Vault @ 0x3FC000 (16KB A/B)">VAULT</div>
+          </div>
+        </div>
+
+        <table class="info-table" style="margin-bottom:10px">
+          <tr><td>Phân vùng Chạy / Chờ nạp</td><td><span id="h-ota-running">ota_0</span> ➔ <span id="h-ota-next">ota_1</span></td></tr>
+          <tr><td>Trạng thái Rollback &amp; Crash</td><td><span id="h-ota-state">VALID</span> | Crash: <span id="h-crash-cnt">0/3</span></td></tr>
+          <tr><td>Chế độ Vận hành &amp; Watchdog</td><td><span id="h-op-mode">NORMAL</span> | <span id="h-wdt-st">TWDT OK</span></td></tr>
+        </table>
+
+        <div class="form-grid" style="margin-bottom:10px">
+          <div class="metric">
+            <div class="metric-lbl">1️⃣ Nạp File Firmware (.bin)</div>
+            <input type="file" id="ota-file-inp" accept=".bin" style="margin:6px 0;font-size:11px;padding:4px">
+            <button class="btn btn-sm btn-primary" style="width:100%" onclick="uploadOtaFile()">🚀 Nạp Firmware OTA</button>
+            <div class="pbar-wrap" id="ota-pbar-wrap" style="display:none;margin-top:6px">
+              <div class="pbar-fill" id="ota-pbar" style="width:0%"></div>
+            </div>
+            <div class="metric-sub" id="ota-status-txt">Kiểm tra Magic 0xE9 &amp; Rollback</div>
+          </div>
+
+          <div class="metric">
+            <div class="metric-lbl">2️⃣ Kéo OTA từ Server (.171)</div>
+            <input type="text" id="ota-pull-url" value="http://10.25.7.171:8095/firmware/cam_streamer.bin" style="margin:6px 0;font-size:11px;padding:5px">
+            <button class="btn btn-sm btn-accent" style="width:100%" onclick="pullOtaServer()">☁️ Kéo OTA Từ .171</button>
+            <div class="metric-sub">Tải nhanh qua mạng LAN nội bộ</div>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-sm" style="color:#fbbf24" onclick="rollbackOta()">⏪ Rollback</button>
+          <button class="btn btn-sm" style="color:#38bdf8" onclick="toggleRescueMode(1)">🛟 Mode Cứu Hộ</button>
+          <button class="btn btn-sm" onclick="rebootDevice()">🔄 Khởi Động Lại</button>
+          <button class="btn btn-sm btn-danger" onclick="factoryResetNvs()">🏭 Xóa NVS Gốc</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- FreeRTOS Task & Stack Watermark Profiler -->
+    <div class="card">
+      <div class="card-title">
+        <span>📊 Bảng Giám Sát Tiến Trình FreeRTOS, Phân Bổ Core 0/1 &amp; Stack High-Water Mark</span>
+        <button class="btn btn-sm" onclick="loadFreeRtosTasks()">🔄 Làm Mới Bảng Task</button>
+      </div>
+      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+        <table class="info-table table-multi" id="rtos-task-table">
+          <thead>
+            <tr style="color:#38bdf8;font-weight:700;border-bottom:1px solid var(--border)">
+              <td>Tiến trình (Task)</td>
+              <td>Nhân CPU</td>
+              <td>Ưu tiên</td>
+              <td>Trạng thái</td>
+              <td>Tải CPU</td>
+              <td style="text-align:right">Stack Trống Tối Thiểu (Watermark)</td>
+            </tr>
+          </thead>
+          <tbody id="rtos-task-body">
+            <tr><td colspan="6" style="text-align:center;color:var(--muted)">Đang tải danh sách tiến trình FreeRTOS...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- TAB 6: SILICON HARDWARE PROFILE, CAMERA SPEC & GPIO PINOUT            -->
+  <!-- ===================================================================== -->
+  <div id="tab-hw" class="tab-content">
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-lbl">🧬 Vi Xử Lý Trung Tâm (SoC)</div>
+        <div class="metric-val" id="hw-soc-name" style="font-size:15px;color:#38bdf8">ESP32-D0WD-V3</div>
+        <div class="metric-sub" id="hw-soc-sub">Xtensa® Dual-Core 32-bit LX6 (Rev v3.0)</div>
+      </div>
+      <div class="metric">
+        <div class="metric-lbl">🧠 Bộ Nhớ RAM &amp; PSRAM</div>
+        <div class="metric-val" id="hw-mem-name" style="font-size:15px;color:#34d399">520KB SRAM + 8MB PSRAM</div>
+        <div class="metric-sub" id="hw-mem-sub">384KB ROM | 16KB RTC | 4MB MMU Mapped</div>
+      </div>
+      <div class="metric">
+        <div class="metric-lbl">💾 Bộ Nhớ Flash &amp; Lưu Trữ</div>
+        <div class="metric-val" id="hw-flash-name" style="font-size:15px;color:#fbbf24">4MB NOR + 16GB SD</div>
+        <div class="metric-sub" id="hw-flash-sub">SPI Flash DIO 40MHz + SDMMC 1-Bit</div>
+      </div>
+      <div class="metric">
+        <div class="metric-lbl">📷 Cảm Biến Camera Quang Học</div>
+        <div class="metric-val" id="hw-cam-title" style="font-size:15px;color:#a78bfa">OV5640 5MP AF</div>
+        <div class="metric-sub" id="hw-cam-sub">PID 0x5640 | VCM 1024-Step | XCLK 10MHz</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Silicon & Memory Architecture Table -->
+      <div class="card">
+        <div class="card-title">
+          <span>⚙️ Thông Số Chi Tiết Vi Xử Lý (CPU), Bộ Nhớ (RAM/PSRAM) &amp; Flash</span>
+          <span class="badge info" id="hw-idf-badge">ESP-IDF v5.3</span>
+        </div>
+        <table class="info-table">
+          <tr><td>Tên Chip (Silicon SoC)</td><td id="hw-tbl-soc">ESP32-D0WD-V3 (Dual-Core Xtensa® 32-bit LX6)</td></tr>
+          <tr><td>Số nhân &amp; Xung nhịp vận hành</td><td id="hw-tbl-freq">2 Nhân (Core 0 PRO + Core 1 APP) @ 160 MHz (Max 240 MHz)</td></tr>
+          <tr><td>Bộ nhớ ROM &amp; RTC SRAM</td><td>448 KB Boot ROM + 16 KB RTC SRAM (Giữ biến <code>s_rtc_crash_cnt</code>)</td></tr>
+          <tr><td>Bộ nhớ Nội (Internal SRAM)</td><td id="hw-tbl-sram">520 KB vật lý (~303 KB Heap động | Trống ~114 KB)</td></tr>
+          <tr><td>Bộ nhớ Ngoài (SPI PSRAM)</td><td id="hw-tbl-psram">8 MB vật lý (4 MB ánh xạ MMU | Trống ~3.94 MB cho AI/Frame)</td></tr>
+          <tr><td>Bộ nhớ Chương trình (SPI Flash)</td><td id="hw-tbl-flash">4 MB (32 Mbit) QIO/DIO @ 40 MHz — Dual OTA A/B + VPN Vault</td></tr>
+          <tr><td>Điện áp hoạt động &amp; Chuẩn eFuse</td><td id="hw-tbl-volt">3.0 V – 3.6 V (Đang chạy: 3.27 V | eFuse Vref: 1093 mV)</td></tr>
+          <tr><td>Giao tiếp Không dây &amp; Bảo mật</td><td>Wi-Fi 802.11 b/g/n (2.4 GHz) + BLE 4.2 | ChaCha20-Poly1305 VPN</td></tr>
+        </table>
+      </div>
+
+      <!-- Camera Sensor & Optics Specification Table -->
+      <div class="card">
+        <div class="card-title">
+          <span>🔭 Thông Số Cảm Biến Camera OV5640, Đèn Phụ PWM &amp; Khe Thẻ Nhớ</span>
+          <span class="badge ok" id="hw-cam-badge">SCCB 0x5640 OK</span>
+        </div>
+        <table class="info-table">
+          <tr><td>Cảm biến Hình ảnh (Image Sensor)</td><td id="hw-tbl-cam">OmniVision OV5640 — 5.0 Megapixel CMOS (1/4" Optical)</td></tr>
+          <tr><td>Độ phân giải Tối đa / Vận hành</td><td>QSXGA 2592×1944 (5MP) | Vận hành chuẩn VGA 640×480 / SVGA</td></tr>
+          <tr><td>Cơ cấu Lấy nét tự động (Autofocus)</td><td id="hw-tbl-af">Mô-tơ VCM tích hợp (1024 bước: 0..1023) + Firmware AF 0x3022</td></tr>
+          <tr><td>Xung nhịp Camera &amp; Băng thông DMA</td><td id="hw-tbl-xclk">XCLK = 10 MHz (LEDC Timer 0) + 2× Framebuffer PSRAM</td></tr>
+          <tr><td>Bộ xử lý tín hiệu ảnh (On-chip ISP)</td><td>AEC/AGC, AWB, BLC, LENC, Denoise, Sharpness, Nén Hardware JPEG</td></tr>
+          <tr><td>Đèn LED Phụ Bù Sáng Chống Lóa</td><td>Chân <code>GPIO 4</code> — Băm xung PWM 5kHz 8-bit (Mặc định 22% khi chụp)</td></tr>
+          <tr><td>Khe Thẻ Nhớ Lưu Trữ (MicroSD)</td><td id="hw-tbl-sd">16 GB FAT32 — Chế độ 1-bit SDMMC (Giải phóng GPIO 4 cho đèn LED)</td></tr>
+          <tr><td>Chế độ Ngủ Sinh Thái (Thermal Eco)</td><td>Tự động Software Standby (<code>0x3008=0x42</code>, &lt;1mA) sau 25s nhàn rỗi</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- GPIO Pinout Map on ESP32-CAM -->
+      <div class="card">
+        <div class="card-title">
+          <span>📌 Sơ Đồ Kết Nối Chân Phần Cứng (ESP32-CAM Pinout Map)</span>
+          <span style="font-size:11px;color:var(--muted)">AI-Thinker Architecture</span>
+        </div>
+        <table class="info-table">
+          <tr><td><code>GPIO 32</code> / <code>GPIO 0</code></td><td>Camera Power-Down (<code>PWDN</code>) / Xung nhịp <code>XCLK 10MHz</code></td></tr>
+          <tr><td><code>GPIO 26</code> / <code>GPIO 27</code></td><td>Bus điều khiển Camera SCCB/I²C (<code>SIOD / SDA</code> &amp; <code>SIOC / SCL</code>)</td></tr>
+          <tr><td><code>GPIO 25</code>, <code>23</code>, <code>22</code></td><td>Đồng bộ khung hình &amp; điểm ảnh (<code>VSYNC</code>, <code>HREF</code>, <code>PCLK</code>)</td></tr>
+          <tr><td><code>GPIO 5, 18, 19, 21, 36, 39, 34, 35</code></td><td>Bus dữ liệu ảnh song song 8-bit DVP (<code>D0 / Y2</code> .. <code>D7 / Y9</code>)</td></tr>
+          <tr><td><code>GPIO 14</code>, <code>15</code>, <code>2</code></td><td>Thẻ nhớ MicroSD chế độ 1-bit SDMMC (<code>CLK</code>, <code>CMD</code>, <code>D0</code>)</td></tr>
+          <tr><td><code>GPIO 4</code> (Độc lập)</td><td>Đèn LED Flash Công suất cao (Điều khiển <code>LEDC_CHANNEL_1</code> PWM)</td></tr>
+          <tr><td><code>GPIO 33</code> / <code>GPIO 1, 3</code></td><td>Đèn LED báo trạng thái nhỏ (Mặt sau) / Cổng nạp <code>UART0 TX/RX</code></td></tr>
+        </table>
+      </div>
+
+      <!-- Comparison Table: Current ESP32-CAM vs Next-Gen ESP32-S3-CAM -->
+      <div class="card">
+        <div class="card-title">
+          <span>🚀 So Sánh Nâng Cấp: Mạch Hiện Tại (ESP32) vs Thế Hệ Mới (ESP32-S3)</span>
+          <span class="badge info">Tư vấn phần cứng</span>
+        </div>
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+          <table class="info-table table-multi">
+            <thead>
+              <tr style="color:#38bdf8;font-weight:700;border-bottom:1px solid var(--border)">
+                <td>Tiêu chí Kỹ thuật</td>
+                <td>Mạch Hiện Tại (ESP32-D0WD-V3)</td>
+                <td style="text-align:right">Mạch Mới (ESP32-S3R8 / N16R8)</td>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Kiến trúc Nhân CPU</td>
+                <td>Dual-Core Xtensa® <b>LX6</b></td>
+                <td style="color:#34d399">Dual-Core Xtensa® <b>LX7 (Mới hơn)</b></td>
+              </tr>
+              <tr>
+                <td>Tập lệnh Tăng tốc AI</td>
+                <td>Không có SIMD chuyên dụng</td>
+                <td style="color:#34d399"><b>Có Vector PIE/SIMD (Nhanh gấp 3–5×)</b></td>
+              </tr>
+              <tr>
+                <td>Ánh xạ Bộ nhớ PSRAM</td>
+                <td>Chip 8MB nhưng MMU giới hạn <b>4 MB</b></td>
+                <td style="color:#34d399">Ánh xạ trọn vẹn <b>8 MB Octal PSRAM</b></td>
+              </tr>
+              <tr>
+                <td>Số chân GPIO &amp; Xung đột</td>
+                <td>34 chân (Thiếu chân, chung GPIO 4/SD)</td>
+                <td style="color:#34d399"><b>45 GPIO</b> (Tách rời Camera, SD, LED)</td>
+              </tr>
+              <tr>
+                <td>Cổng giao tiếp nạp/debug</td>
+                <td>Qua chip cầu UART rời (CH340/CP2102)</td>
+                <td style="color:#34d399"><b>Tích hợp USB OTG + USB Serial/JTAG</b></td>
+              </tr>
+              <tr>
+                <td>Độ tương thích Dự án này</td>
+                <td>Đang chạy ổn định 100%</td>
+                <td style="color:#fbbf24">Tương thích 100% ESP-IDF v5.5 (Đổi target)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Expansion I/O, Bluetooth & Peripheral Control Center -->
+    <div class="card" style="border-color:rgba(16,185,129,0.35)">
+      <div class="card-title">
+        <span>🔌 Trung Tâm Mở Rộng Chân I/O Trống, Ngoại Vi &amp; Năng Lực Bluetooth/BLE</span>
+        <span class="badge ok">Giải phóng nhờ SDMMC 1-Bit</span>
+      </div>
+      <div class="form-grid" style="margin-bottom:12px">
+        <!-- GPIO 33 Rear Red LED -->
+        <div class="metric">
+          <div class="metric-lbl">🔴 GPIO 33 — Đèn LED Đỏ Mặt Sau (Không Lóa Cam)</div>
+          <div class="metric-val" id="io-gpio33-txt" style="font-size:14px;color:#34d399">Nhịp tim Heartbeat (5s)</div>
+          <div class="btn-row" style="margin-top:6px">
+            <button class="btn btn-sm" onclick="setCamCtrl('rear_led_mode', 0); setTimeout(updateStatus, 300)">🌑 Tắt</button>
+            <button class="btn btn-sm btn-danger" onclick="setCamCtrl('rear_led_mode', 1); setTimeout(updateStatus, 300)">🔴 Bật Sáng</button>
+            <button class="btn btn-sm btn-success" onclick="setCamCtrl('rear_led_mode', 2); setTimeout(updateStatus, 300)">💓 Heartbeat</button>
+          </div>
+          <div class="metric-sub">Báo trạng thái mạng ở mặt lưng mạch, không hắt sáng vào kính đồng hồ</div>
+        </div>
+
+        <!-- GPIO 12 Relay / Solenoid Valve Output -->
+        <div class="metric">
+          <div class="metric-lbl">⚡ GPIO 12 — Ngõ Ra Điều Khiển Van Từ / Relay / Còi</div>
+          <div class="metric-val" id="io-gpio12-txt" style="font-size:14px;color:#94a3b8">ĐANG TẮT (LOW 0V)</div>
+          <div class="btn-row" style="margin-top:6px">
+            <button class="btn btn-sm btn-success" onclick="setCamCtrl('gpio12_relay', 1); setTimeout(updateStatus, 300)">🟢 Kích Bật (HIGH 3.3V)</button>
+            <button class="btn btn-sm" onclick="setCamCtrl('gpio12_relay', 0); setTimeout(updateStatus, 300)">⚪ Ngắt (LOW 0V)</button>
+          </div>
+          <div class="metric-sub">Chân trống nhờ SD 1-bit (Khởi động ở mức LOW an toàn cho MTDI Boot)</div>
+        </div>
+
+        <!-- GPIO 13 Digital Input / Pulse / Leak Sensor -->
+        <div class="metric">
+          <div class="metric-lbl">🌊 GPIO 13 — Ngõ Vào Xung Reed / Cảm Biến Ngập Nước</div>
+          <div class="metric-val" id="io-gpio13-txt" style="font-size:14px;color:#38bdf8">Mức Logic: HIGH (1) | Xung: 0</div>
+          <div class="btn-row" style="margin-top:6px">
+            <button class="btn btn-sm" onclick="updateStatus()">🔄 Đọc Mức Logic</button>
+            <button class="btn btn-sm btn-accent" onclick="setCamCtrl('gpio13_reset', 1); setTimeout(updateStatus, 300)">🧹 Xóa Bộ Đếm Xung</button>
+          </div>
+          <div class="metric-sub">Internal Pull-up sẵn sàng nối công tắc từ Reed Switch, phao tràn hoặc cửa tủ</div>
+        </div>
+      </div>
+
+      <table class="info-table">
+        <tr>
+          <td><b>Năng lực Dư thừa CPU &amp; RAM</b></td>
+          <td>CPU Dual-Core 160MHz mới dùng <b>~2.5%</b> (Còn trống <b>&gt;95%</b>) | PSRAM còn trống <b>3.98 MB / 4.18 MB</b> | Flash còn trống <b>~668 KB</b> mỗi phân vùng OTA.</td>
+        </tr>
+        <tr>
+          <td><b>Đánh giá Bluetooth / BLE 4.2</b></td>
+          <td>Chip hỗ trợ <b>BLE 4.2 + BT Classic</b>, nhưng dùng chung ăng-ten 2.4GHz với Wi-Fi + WireGuard và tiêu tốn <b>~50KB Internal SRAM</b>. Khuyên dùng ở chế độ <b>BLE On-Demand</b> (Cấu hình WiFi cứu hộ qua điện thoại hoặc quét cảm biến nhiệt ẩm BLE định kỳ).</td>
+        </tr>
+        <tr>
+          <td><b>Mở rộng I²C &amp; UART / RS485</b></td>
+          <td>Bus <code>GPIO 26/27</code> có thể nối song song cảm biến <b>BME280 / AHT20 / INA219</b>; chân <code>GPIO 1/3</code> (khi chạy nguồn 5V độc lập) có thể nối module <b>RS485 Modbus RTU</b> đọc biến tần/đồng hồ điện.</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- TAB 2: AI PHYSICAL EYES, HARDWARE DEBUGGER & ZERO-PROMPT MCP HUB      -->
+  <!-- ===================================================================== -->
+  <div id="tab-aieyes" class="tab-content">
+    <div class="card" style="border-color:rgba(14,165,233,0.4);background:linear-gradient(180deg,rgba(14,165,233,0.07),rgba(17,24,39,0.95))">
+      <div class="card-title">
+        <span>👁️ Trạm Tai Mắt Thực Tế &amp; Gỡ Lỗi Phần Cứng Tự Động Cho AI Agent (Zero-Prompt Hardware Probe)</span>
+        <span class="badge ok" id="aieyes-mcp-badge">MCP JSON-RPC 2.0: Sẵn sàng ✅</span>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.5">
+        Module này biến ESP32-CAM + Server AI (.171) thành <b>đôi mắt vật lý</b> cho mọi AI Agent (Antigravity, Claude Code, Cursor, n8n). AI có thể tự động chụp ảnh, kiểm tra mảng đèn báo (<b>Nguồn PWR, Trạng thái RUN, Đèn lỗi ERR, Đèn nháy truyền thông RS485/UART TX-RX</b>) và đọc màn hình <b>LCD / OLED / LED 7 thanh</b> mà bạn không cần chụp ảnh thủ công hay mô tả lại.
+      </div>
+
+      <div class="btn-row" style="margin-bottom:12px">
+        <button class="btn btn-primary" onclick="runAiBoardObserve()">🔬 Quét Mạch &amp; Đèn Báo Ngay (1-Call Observe)</button>
+        <button class="btn btn-accent" onclick="runAiMultiScreenSweep()">🔄 Quét Trọn Vòng Đa Màn Hình (6 Ảnh × 1.6s)</button>
+        <button class="btn btn-accent" onclick="runAiBurstBlinkCheck()">⚡ Bắt Nhịp Nháy Đèn Truyền Thông TX/RX (Burst 3 Ảnh)</button>
+        <button class="btn btn-success" onclick="showAiDisplayCrop()">📺 Cắt Nét Màn Hình LCD / OLED (2x CLAHE)</button>
+        <button class="btn" onclick="runRoiFocusSweep()">🎯 Tự Khóa Đỉnh Nét VCM Theo ROI</button>
+      </div>
+
+      <!-- MULTI-SCREEN AUTO-CYCLING METER TRACKER PANEL -->
+      <div style="background:#050811;border:1px solid rgba(56,189,248,0.35);border-radius:12px;padding:12px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+          <span style="font-size:11.5px;font-weight:800;color:#38bdf8;text-transform:uppercase">🔄 Bộ Nhớ Vòng Lặp Đồng Hồ Đa Màn Hình (Multi-Screen Cycling Tracker)</span>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span class="badge info" id="aieyes-ms-summary">Tự tách từng trang chỉ số OBIS / Đơn vị</span>
+            <button class="btn btn-sm" style="padding:2px 8px;font-size:10.5px" onclick="loadMultiScreens()">🔄 Làm mới</button>
+            <button class="btn btn-sm btn-danger" style="padding:2px 8px;font-size:10.5px" onclick="resetMultiScreens()">🗑️ Xóa Slot</button>
+          </div>
+        </div>
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+          <table class="info-table table-multi" style="font-size:11.5px">
+            <thead>
+              <tr style="color:#94a3b8;border-bottom:1px solid #1e293b">
+                <td>Khe / Trang</td>
+                <td>Mã OBIS / Phụ</td>
+                <td>Tên Chỉ Số &amp; Loại</td>
+                <td>Giá Trị Đọc</td>
+                <td>Chu Kỳ Lặp</td>
+                <td style="text-align:right">Cập Nhật &amp; Đổi Tên</td>
+              </tr>
+            </thead>
+            <tbody id="aieyes-ms-tbody">
+              <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:12px">Bấm <b>"🔄 Quét Trọn Vòng Đa Màn Hình"</b> để tự động chụp chuỗi ảnh theo chu kỳ chuyển trang của đồng hồ và tách riêng từng chỉ số (Tổng kWh/m³, Lưu lượng, Điện áp, Tần số...).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <!-- Multi-LED Array & Blinking Status Table -->
+        <div style="background:#050811;border:1px solid #1e293b;border-radius:12px;padding:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-size:11.5px;font-weight:800;color:#38bdf8;text-transform:uppercase">💡 Bảng Phân Tích Mảng Đèn Báo Trên Mạch (Multi-LED Array)</span>
+            <span class="badge info" id="aieyes-led-summary">Đang chờ quét...</span>
+          </div>
+          <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+            <table class="info-table table-multi" style="font-size:11.5px">
+              <thead>
+                <tr style="color:#94a3b8;border-bottom:1px solid #1e293b">
+                  <td>#</td>
+                  <td>Màu Sắc Đèn</td>
+                  <td>Vai Trò Gợi Ý</td>
+                  <td>Tọa Độ</td>
+                  <td style="text-align:right">Trạng Thái Nháy / Tĩnh</td>
+                </tr>
+              </thead>
+              <tbody id="aieyes-led-tbody">
+                <tr><td colspan="5" style="text-align:center;color:var(--muted);padding:14px">Bấm <b>"🔬 Quét Mạch"</b> hoặc <b>"⚡ Bắt Nhịp Nháy TX/RX"</b> để phân tích từng đèn LED trên bo mạch.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Zoomed LCD/OLED/7-Seg Display Crop & OCR Readout -->
+        <div style="background:#050811;border:1px solid #1e293b;border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:11.5px;font-weight:800;color:#34d399;text-transform:uppercase">📺 Ảnh Cắt Cận Cảnh Màn Hình LCD / OLED / 7-Seg</span>
+            <span style="font-size:11px;color:var(--muted)" id="aieyes-disp-meta">CLAHE 2x Contrast</span>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <img id="aieyes-crop-img" src="http://10.25.7.171:8095/api/ai/crop_display" alt="LCD/OLED Crop" style="width:180px;height:110px;object-fit:contain;background:#000;border:1px solid #334155;border-radius:8px" onerror="this.style.opacity=0.3">
+            <div style="flex:1;min-width:160px;display:flex;flex-direction:column;gap:5px;font-size:12px">
+              <div>📟 <b>LCD / OLED OCR:</b> <span id="aieyes-lcd-txt" style="color:#38bdf8;font-family:monospace;font-weight:800">----</span></div>
+              <div>🔢 <b>LED 7 Thanh:</b> <span id="aieyes-seg7-txt" style="color:#34d399;font-family:monospace;font-weight:800">----</span></div>
+              <div>🎡 <b>Đồng Hồ Kim Quay:</b> <span id="aieyes-dial-txt" style="color:#fbbf24;font-family:monospace;font-weight:800">----</span></div>
+              <div>💡 <b>Tổng Hợp Đèn:</b> <span id="aieyes-led-txt" style="color:#f8fafc;font-weight:700">--</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Zero-Prompt Endpoints & URLs for AI Agents -->
+      <div class="card">
+        <div class="card-title">
+          <span>🔗 Danh Mục URL, REST API &amp; MCP Cho Mọi Module AI Tự Đọc</span>
+          <a class="btn btn-sm btn-primary" href="/api/ai/manifest" target="_blank">📄 Mở Manifest JSON ↗</a>
+        </div>
+        <table class="info-table" style="font-size:11.5px">
+          <tr>
+            <td><b>1. Zero-Prompt Manifest</b><br><span style="color:var(--muted)">AI đọc 1 lần để tự hiểu toàn bộ API</span></td>
+            <td>
+              <code>http://10.25.7.100/api/ai/manifest</code>
+              <button class="btn btn-sm" style="padding:2px 7px;margin-left:4px" onclick="copyText('http://10.25.7.100/api/ai/manifest')">📋</button>
+            </td>
+          </tr>
+          <tr>
+            <td><b>2. Quan Sát Mạch 1-Lệnh</b><br><span style="color:var(--muted)">Tự bật đèn phụ + chụp + trả JSON</span></td>
+            <td>
+              <code>http://10.25.7.100/api/ai/observe</code>
+              <button class="btn btn-sm" style="padding:2px 7px;margin-left:4px" onclick="copyText('http://10.25.7.100/api/ai/observe?flash=auto&focus=keep')">📋</button>
+            </td>
+          </tr>
+          <tr>
+            <td><b>3. Bắt Nháy Đèn TX/RX (Burst)</b><br><span style="color:var(--muted)">Chụp 3 ảnh 250ms phân biệt nháy/tĩnh</span></td>
+            <td>
+              <code>http://10.25.7.171:8095/api/ai/burst_check</code>
+              <button class="btn btn-sm" style="padding:2px 7px;margin-left:4px" onclick="copyText('http://10.25.7.171:8095/api/ai/burst_check?frames=3&interval_ms=250')">📋</button>
+            </td>
+          </tr>
+          <tr>
+            <td><b>4. Cắt Nét Màn Hình LCD/OLED</b><br><span style="color:var(--muted)">Ảnh JPEG đã khử nghiêng + CLAHE 2x</span></td>
+            <td>
+              <code>http://10.25.7.171:8095/api/ai/crop_display</code>
+              <button class="btn btn-sm" style="padding:2px 7px;margin-left:4px" onclick="copyText('http://10.25.7.171:8095/api/ai/crop_display')">📋</button>
+            </td>
+          </tr>
+          <tr>
+            <td><b>5. MCP Server Đa Phương Thức</b><br><span style="color:var(--muted)">JSON-RPC 2.0 trả cả JSON + Ảnh Base64</span></td>
+            <td>
+              <code>http://10.25.7.171:8095/mcp</code>
+              <button class="btn btn-sm" style="padding:2px 7px;margin-left:4px" onclick="copyText('http://10.25.7.171:8095/mcp')">📋</button>
+            </td>
+          </tr>
+          <tr>
+            <td><b>6. MCP Trực Tiếp Trên ESP32</b><br><span style="color:var(--muted)">Chạy qua LAN (.100) hoặc VPN (10.212.156.7)</span></td>
+            <td>
+              <code>http://10.25.7.100/mcp</code>
+              <button class="btn btn-sm" style="padding:2px 7px;margin-left:4px" onclick="copyText('http://10.25.7.100/mcp')">📋</button>
+            </td>
+          </tr>
+          <tr>
+            <td><b>7. Quét Vòng Lặp Đa Màn Hình</b><br><span style="color:var(--muted)">Chụp 6 ảnh × 1.6s gom toàn bộ các trang chỉ số</span></td>
+            <td>
+              <code>http://10.25.7.171:8095/api/ai/multi_screen_sweep</code>
+              <button class="btn btn-sm" style="padding:2px 7px;margin-left:4px" onclick="copyText('http://10.25.7.171:8095/api/ai/multi_screen_sweep?frames=6&interval_ms=1600')">📋</button>
+            </td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- Ready-to-Use MCP Config & Zero-Prompt Snippet -->
+      <div class="card">
+        <div class="card-title">
+          <span>⚡ Cấu Hình Tích Hợp MCP &amp; Ngữ Cảnh Tự Động (Không Cần Prompt Lại)</span>
+          <button class="btn btn-sm btn-success" onclick="copyMcpConfig()">📋 Copy MCP JSON</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--muted);margin-bottom:6px">
+          <b>A. Cấu hình chuẩn MCP (<code>~/.gemini/settings.json</code> / Claude / Cursor):</b>
+        </div>
+        <pre id="mcp-json-snippet" style="background:#050811;border:1px solid #1e293b;border-radius:8px;padding:8px 10px;font-size:11px;color:#38bdf8;overflow-x:auto;margin:0 0 10px 0">{
+  "mcpServers": {
+    "esp32cam-eyes": {
+      "type": "http",
+      "url": "http://10.25.7.171:8095/mcp"
+    }
+  }
+}</pre>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <span style="font-size:11.5px;color:var(--muted)"><b>B. Khối chỉ dẫn 1 dòng cho bất kỳ AI Agent nào (Zero-Prompt):</b></span>
+          <button class="btn btn-sm btn-accent" style="padding:3px 8px" onclick="copyZeroPromptBlock()">📋 Copy Chỉ Dẫn AI</button>
+        </div>
+        <pre id="zero-prompt-snippet" style="background:#050811;border:1px solid #1e293b;border-radius:8px;padding:8px 10px;font-size:11px;color:#34d399;white-space:pre-wrap;margin:0">Hãy đọc http://10.25.7.100/api/ai/manifest để tự động sử dụng camera ESP32-CAM làm mắt thần kiểm tra đèn LED (Nguồn/Status/Lỗi/TX-RX) và màn hình LCD/OLED của mạch phần cứng.</pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- LIGHTBOX MODAL FOR SD IMAGE PREVIEW -->
+<div class="modal-backdrop" id="img-modal" onclick="if(event.target===this)closeImgModal()">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="modal-title">🖼️ Xem ảnh chụp</span>
+      <button class="btn btn-sm" onclick="closeImgModal()">✖ Đóng</button>
+    </div>
+    <div class="modal-body">
+      <img id="modal-img" src="" alt="Preview">
+    </div>
+    <div class="modal-foot">
+      <span style="font-size:12px;color:var(--muted)" id="modal-meta"></span>
+      <div style="display:flex;gap:8px">
+        <a class="btn btn-sm btn-primary" id="modal-dl" href="#" download>⬇️ Tải Ảnh Gốc</a>
+        <button class="btn btn-sm btn-danger" id="modal-del" onclick="">🗑️ Xóa Ảnh Này</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast">Đã lưu!</div>
+

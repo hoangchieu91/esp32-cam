@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tài Liệu Kỹ Thuật & Kiến Trúc Hệ Thống — ESP32-CAM Smart Meter & AI Vision</title>
+<style>
+:root {
+  --bg: #070b14;
+  --sidebar: #0b1120;
+  --card: #111827;
+  --card-alt: #0d1424;
+  --border: #1e293b;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --primary: #0ea5e9;
+  --accent: #6366f1;
+  --success: #10b981;
+  --warn: #f59e0b;
+  --danger: #ef4444;
+  --radius: 14px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  display: flex;
+  min-height: 100vh;
+}
+
+/* Sidebar Navigation */
+.sidebar {
+  width: 280px;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  padding: 20px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  z-index: 100;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.brand-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #0ea5e9, #6366f1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.brand-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1.25;
+}
+.brand-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+.nav-group-title {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #38bdf8;
+  font-weight: 800;
+  margin: 6px 0 4px 8px;
+}
+.nav-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  transition: 0.15s;
+}
+.nav-link:hover, .nav-link.active {
+  background: rgba(14, 165, 233, 0.14);
+  color: #38bdf8;
+}
+.quick-links {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.qbtn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  transition: 0.15s;
+}
+.qbtn:hover {
+  border-color: var(--primary);
+  background: rgba(14, 165, 233, 0.15);
+}
+
+/* Main Content Area */
+.main {
+  margin-left: 280px;
+  flex: 1;
+  padding: 32px 44px 80px 44px;
+  max-width: 1360px;
+}
+@media (max-width: 960px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; padding: 20px 16px 60px 16px; }
+}
+
+/* Hero Banner */
+.hero {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.14), rgba(99, 102, 241, 0.12));
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 18px;
+  padding: 26px 30px;
+  margin-bottom: 30px;
+}
+.hero-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.pill {
+  padding: 4px 10px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #38bdf8;
+}
+.pill.ok { color: #34d399; border-color: rgba(16, 185, 129, 0.35); }
+.pill.warn { color: #fbbf24; border-color: rgba(245, 158, 11, 0.35); }
+.hero h1 {
+  margin: 0 0 8px 0;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.hero p {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 14.5px;
+  max-width: 940px;
+}
+
+/* Section Headers & Cards */
+section {
+  margin-bottom: 42px;
+  scroll-margin-top: 24px;
+}
+.sec-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.sec-num {
+  background: rgba(14, 165, 233, 0.18);
+  color: #38bdf8;
+  border: 1px solid rgba(14, 165, 233, 0.4);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 7px;
+}
+.sec-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  margin-bottom: 16px;
+}
+.card h3 {
+  margin: 0 0 10px 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #38bdf8;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+}
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 14px;
+}
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+/* Topology Flow Boxes */
+.topo-flow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+.node-box {
+  background: var(--card-alt);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  position: relative;
+}
+.node-box.highlight {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.04);
+}
+.node-title {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 4px;
+}
+.node-ip {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  color: #38bdf8;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.node-list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.node-list li { margin-bottom: 3px; }
+
+/* Flash Partition Bar */
+.flash-bar {
+  display: flex;
+  height: 42px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  margin: 14px 0;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+.flash-seg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  text-align: center;
+  line-height: 1.15;
+  padding: 0 4px;
+}
+
+/* Tables */
+.table-wrap { overflow-x: auto; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th, td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+}
+th {
+  background: rgba(255, 255, 255, 0.03);
+  color: #38bdf8;
+  font-weight: 700;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+code {
+  font-family: Consolas, "Courier New", monospace;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: #38bdf8;
+  font-size: 12px;
+}
+pre {
+  background: #050811;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-family: Consolas, monospace;
+  font-size: 12.5px;
+  color: #e2e8f0;
+  margin: 10px 0;
+}
+
+/* Formula & Callout Boxes */
+.formula-box {
+  background: #050811;
+  border-left: 4px solid #f59e0b;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+  color: #fde68a;
+  margin: 10px 0;
+}
+.callout {
+  background: rgba(14, 165, 233, 0.07);
+  border: 1px solid rgba(14, 165, 233, 0.28);
+  border-radius: 11px;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: #e2e8f0;
+  margin-top: 10px;
+}
+.callout.warn {
+  background: rgba(245, 158, 11, 0.07);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+.callout.ok {
+  background: rgba(16, 185, 129, 0.07);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+/* Step Timeline */
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.step-item {
+  display: flex;
+  gap: 14px;
+  background: var(--card-alt);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 12px 16px;
+  align-items: flex-start;
+}
+.step-circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 800;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.step-body b { color: #fff; font-size: 13.5px; display: block; margin-bottom: 2px; }
+.step-body span { color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+
+<!-- LEFT SIDEBAR NAVIGATION -->
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-badge">📷</div>
+    <div>
+      <div class="brand-title">ESP32-CAM AI</div>
+      <div class="brand-sub">Cẩm Nang Kỹ Thuật &amp; Nghiệp Vụ</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="nav-group-title">Mục Lục Tài Liệu</div>
+    <ul class="nav-list">
+      <li><a class="nav-link" href="#sec-arch"><span>🏗️</span> 1. Kiến trúc &amp; Hạ tầng</a></li>
+      <li><a class="nav-link" href="#sec-mem"><span>🛡️</span> 2. Phân vùng Flash &amp; VPN Vault</a></li>
+      <li><a class="nav-link" href="#sec-meter"><span>🎡</span> 3. Nghiệp vụ Đọc Đồng Hồ</a></li>
+      <li><a class="nav-link" href="#sec-dial"><span>📐</span> 4. Thuật toán Kim Quay &amp; V(t-1)</a></li>
+      <li><a class="nav-link" href="#sec-flash"><span>💡</span> 5. Đèn Phụ PWM &amp; Chu kỳ Đọc</a></li>
+      <li><a class="nav-link" href="#sec-flow"><span>🔄</span> 6. Quy trình Kết nối &amp; Luồng</a></li>
+      <li><a class="nav-link" href="#sec-api"><span>🔌</span> 7. Danh mục API &amp; MQTT</a></li>
+      <li><a class="nav-link" href="#sec-ops"><span>🛠️</span> 8. Biên dịch, OTA &amp; Cứu hộ</a></li>
+    </ul>
+  </div>
+
+  <div class="quick-links">
+    <div class="nav-group-title" style="margin-left:0">Truy Cập Nhanh Thiết Bị</div>
+    <a class="qbtn" href="http://10.25.7.100" target="_blank"><span>📱 Web ESP32 (LAN)</span><span>10.25.7.100 ↗</span></a>
+    <a class="qbtn" href="http://10.212.156.7" target="_blank"><span>🔒 Web ESP32 (VPN)</span><span>10.212.156.7 ↗</span></a>
+    <a class="qbtn" href="http://10.25.7.171:8095" target="_blank"><span>🧠 Server AI Hub</span><span>.171:8095 ↗</span></a>
+    <a class="qbtn" href="./PROJECT_DOCS_AI.md" target="_blank"><span>🤖 Bản Markdown (Cho AI)</span><span>.MD ↗</span></a>
+  </div>
+</aside>
+
+<!-- MAIN CONTENT -->
+<main class="main">
+
+  <!-- HERO BANNER -->
+  <div class="hero">
+    <div class="hero-tags">
+      <span class="pill ok">✅ OV5640 5MP VCM Autofocus</span>
+      <span class="pill ok">✅ WireGuard VPN Vault @ 0x3FC000</span>
+      <span class="pill warn">🎡 Đọc Đồng Hồ Nước Kim Quay + Lọc V(t-1)</span>
+      <span class="pill">💡 Đèn Phụ GPIO 4 PWM Chống Lóa</span>
+      <span class="pill">🧠 RK3576 NPU AI Server (.171)</span>
+    </div>
+    <h1>Hệ Thống Camera AI Đọc Chỉ Số Đồng Hồ Công Nghiệp &amp; Giám Sát Tại Biên</h1>
+    <p>
+      Tài liệu tổng hợp toàn bộ kiến trúc phần cứng, quy hoạch phân vùng nhớ bất tử <code>vpn_vault</code>, thuật toán thị giác máy tính đọc <b>Đèn báo trạng thái, LED 7 thanh, màn hình LCD, đồng hồ nước kim quay</b> kết hợp bộ lọc lịch sử <b>V(t-1)</b> và quy trình kết nối End-to-End của dự án <code>e:\00_Code\esp32-cam</code>.
+    </p>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- SECTION 1: SYSTEM ARCHITECTURE & HARDWARE TOPOLOGY                  -->
+  <!-- =================================================================== -->
+  <section id="sec-arch">
+    <div class="sec-head">
+      <span class="sec-num">PHẦN 01</span>
+      <h2>Kiến Trúc Tổng Thể &amp; Hạ Tầng Phần Cứng</h2>
+    </div>
+
+    <div class="card">
+      <h3><span>🌐 Sơ Đồ 4 Nút Mạng Trong Hệ Sinh Thái</span><span>LAN 10.25.7.0/24 + WireGuard 10.212.156.0/24</span></h3>
+      <div class="topo-flow">
+        <div class="node-box highlight">
+          <div class="node-title">1. Mạch Biên ESP32-CAM</div>
+          <div class="node-ip">LAN: 10.25.7.100 | VPN: 10.212.156.7</div>
+          <ul class="node-list">
+            <li>SoC: <b>ESP32-D0WD-V3</b> (Dual-Core 160MHz Eco)</li>
+            <li>Bộ nhớ: <b>4MB Flash + 8MB PSRAM</b></li>
+            <li>Camera: <b>OV5640 5MP</b> có cuộn lấy nét <b>VCM AF</b></li>
+            <li>Đèn trợ sáng: <b>GPIO 4 PWM 5kHz</b> chống lóa kính</li>
+            <li>Thẻ nhớ: <b>SU16G (16GB)</b> chạy <b>1-bit SDMMC</b></li>
+          </ul>
+        </div>
+
+        <div class="node-box">
+          <div class="node-title">2. Máy Chính Windows Build &amp; Direct OTA</div>
+          <div class="node-ip">Workspace: e:\00_Code\esp32-cam</div>
+          <ul class="node-list">
+            <li>Toolchain cục bộ: <b>ESP-IDF v5.5.1</b> trên Windows</li>
+            <li>Triển khai 1 bước: <code>python tools/deploy.py</code></li>
+            <li>Tự dò IP qua MQTT (.171) &amp; đẩy HTTP OTA không dây</li>
+            <li><i>(Dự phòng)</i> Máy Linux <code>100.126.145.106</code> nạp cáp UART</li>
+          </ul>
+        </div>
+
+        <div class="node-box highlight">
+          <div class="node-title">3. Máy Chủ Deep AI &amp; Lưu Trữ</div>
+          <div class="node-ip">IP: 10.25.7.171 (RK3576 NPU)</div>
+          <ul class="node-list">
+            <li><b>AI Hub (:8095)</b>: YOLOv8n NPU + SmartMeter CV + Bộ lọc lịch sử <code>MeterStateTracker</code></li>
+            <li><b>FTP Server (:21)</b>: Lưu ảnh gốc tại <code>/var/ftp/esp32cam</code></li>
+            <li><b>MQTT Broker (:1883)</b>: Kênh thời gian thực <code>esp32cam/#</code></li>
+          </ul>
+        </div>
+
+        <div class="node-box">
+          <div class="node-title">4. Cổng VPN &amp; Thông Báo Đẩy</div>
+          <div class="node-ip">VPN: nxchieu.duckdns.org:51820</div>
+          <ul class="node-list">
+            <li><b>WireGuard Gateway</b>: Cấp IP tĩnh <code>10.212.156.7</code> xuyên NAT/4G (`MTU 1360`)</li>
+            <li><b>Ntfy Server (10.25.7.116:8092)</b>: Đẩy cảnh báo tức thời về điện thoại</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span>🔌 Giải Quyết Xung Đột Phần Cứng: Thẻ Nhớ MicroSD vs. Đèn Flash LED GPIO 4</span></h3>
+      <p style="margin:0 0 10px 0;font-size:13.5px;color:#cbd5e1">
+        Trên mạch chuẩn ESP32-CAM, chân <code>GPIO 4</code> vừa nối vào bóng đèn LED Flash công suất lớn (qua Transistor Q1) vừa nối vào đường dữ liệu <code>HS2_DATA1</code> của khe thẻ nhớ. Nếu dùng chế độ 4-bit SDMMC mặc định, mỗi lần ghi ảnh vào thẻ nhớ đèn Flash sẽ chớp sáng chói lòa và không thể điều khiển độ sáng bằng PWM.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Khối Phần Cứng</th>
+              <th>Chân GPIO Sử Dụng</th>
+              <th>Cấu Hình Tối Ưu Trong Firmware</th>
+              <th>Lợi Ích Kỹ Thuật Đạt Được</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>Thẻ nhớ MicroSD (SU16G)</b></td>
+              <td><code>GPIO 14</code> (CLK)<br><code>GPIO 15</code> (CMD)<br><code>GPIO 2</code> (DATA0)</td>
+              <td>Chế độ <b>1-bit SDMMC</b> (<code>SDMMC_HOST_FLAG_1BIT</code>, <code>slot_config.width = 1</code>) + Tự động Remount khi lỗi</td>
+              <td>Giải phóng hoàn toàn chân <code>GPIO 4</code>, <code>GPIO 12</code>, <code>GPIO 13</code>; ghi ảnh 60KB chỉ mất ~35ms mà không làm nháy đèn Flash.</td>
+            </tr>
+            <tr>
+              <td><b>Đèn LED Phụ Trợ Sáng</b></td>
+              <td><code>GPIO 4</code> (Độc lập 100%)</td>
+              <td>Bộ băm xung <b>LEDC PWM</b> (<code>LEDC_TIMER_1</code>, <code>LEDC_CHANNEL_1</code>, tần số <code>5kHz</code>, 8-bit <code>0..255</code>)</td>
+              <td>Điều chỉnh mềm độ sáng từ <code>0%..100%</code>; bật mức dịu <b>22% (55/255)</b> chống lóa mặt kính đồng hồ nước khi chụp đêm.</td>
+            </tr>
+            <tr>
+              <td><b>Cảm biến Camera OV5640 AF</b></td>
+              <td>XCLK: <code>GPIO 0</code><br>SCCB: <code>GPIO 26, 27</code><br>PWDN: <code>GPIO 32</code></td>
+              <td>Hạ xung <code>XCLK = 10MHz</code> + Ngắt dòng cuộn lấy nét VCM (<code>0x3022=0x08</code>) + Ngủ Standby (<code>&lt;1mA</code>) sau 25s</td>
+              <td>Giảm <b>45%</b> nhiệt lượng tỏa ra trên cảm biến; giữ nhiệt độ MCU ổn định ở mức <b>46°C – 54°C</b> khi chạy 24/7.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================================================================== -->
+  <!-- SECTION 2: 4MB FLASH PARTITION & INDESTRUCTIBLE VPN VAULT           -->
+  <!-- =================================================================== -->
+  <section id="sec-mem">
+    <div class="sec-head">
+      <span class="sec-num">PHẦN 02</span>
+      <h2>Quy Hoạch Bộ Nhớ Flash 4MB &amp; Phân Vùng Bất Tử <code>vpn_vault</code></h2>
+    </div>
+
+    <div class="card">
+      <h3><span>🗺️ Sơ Đồ Phân Vùng Chip Flash 4MB (<code>partitions.csv</code>)</span><span>Tương thích Dual-OTA 100%</span></h3>
+      <div class="flash-bar">
+        <div class="flash-seg" style="width:7%;background:#334155" title="Bootloader + Partition Table (0x1000..0x9000)">Boot<br>36KB</div>
+        <div class="flash-seg" style="width:6%;background:#0284c7" title="NVS Config + wg_vault (0x9000, 20KB)">NVS<br>20KB</div>
+        <div class="flash-seg" style="width:4%;background:#475569" title="OTA Data (0xE000, 8KB)">OTA<br>8KB</div>
+        <div class="flash-seg" style="width:36%;background:#059669" title="Application Slot 0 (0x10000, 1984KB)">ota_0 (Active App)<br>1,984 KB (0x10000)</div>
+        <div class="flash-seg" style="width:36%;background:#2563eb" title="Application Slot 1 (0x200000, 1984KB)">ota_1 (OTA / Rollback)<br>1,984 KB (0x200000)</div>
+        <div class="flash-seg" style="width:6%;background:#d97706" title="Panic CoreDump (0x3F0000, 48KB)">Core<br>48KB</div>
+        <div class="flash-seg" style="width:5%;background:#7c3aed" title="Indestructible VPN Vault (0x3FC000, 16KB)">VAULT<br>16KB</div>
+      </div>
+
+      <div class="grid-2" style="margin-top:16px">
+        <div class="node-box highlight">
+          <div class="node-title">🛡️ Kiến Trúc Bảo Vệ 4 Tầng Cho WireGuard VPN &amp; 5 WiFi</div>
+          <ol class="node-list" style="padding-left:18px;color:#e2e8f0">
+            <li><b>Tầng 1 — Phân vùng Raw Flash <code>vpn_vault</code> @ <code>0x3FC000</code> (16 KB, Dual-Sector A/B)</b>: Ghi nguyên tử vào <i>Sector 1 (Mirror @ 0x1000)</i> trước rồi mới ghi vào <i>Sector 0 (Primary @ 0x0000)</i> kèm mã băm <b>FNV-1a 32-bit checksum</b>. Tự động vá lại Sector 0 nếu mất điện đột ngột khi đang xóa Flash.</li>
+            <li><b>Tầng 2 — Namespace NVS độc lập (<code>"wg_vault"</code> @ <code>0x9000</code>)</b>: Lưu từng trường khóa lẻ, không bị reset khi cấu trúc <code>sizeof(app_config_t)</code> thay đổi giữa các phiên bản firmware.</li>
+            <li><b>Tầng 3 — Sao lưu tự động trên Thẻ nhớ (<code>/sdcard/wg_vault.conf</code>)</b>: Tự động khôi phục VPN ngay cả khi chạy lệnh xóa trắng toàn bộ chip Flash (<code>erase_flash</code>); tự tái tạo sau khi Format FAT32 và ẩn khỏi API <code>/list</code>.</li>
+            <li><b>Tầng 4 — Cấu hình Mặc định Cứng trong Firmware</b>: Dự phòng cuối cùng (<code>10.212.156.7</code> &amp; WiFi <code>HA</code>).</li>
+          </ol>
+        </div>
+
+        <div class="node-box">
+          <div class="node-title">⚡ Quy Hoạch RAM Nội (Internal SRAM) vs. PSRAM (8MB)</div>
+          <ul class="node-list" style="color:#cbd5e1">
+            <li><b>Internal SRAM (~303 KB, luôn trống ~115 KB)</b>: Dành riêng cho DMA WiFi/SDMMC, ngăn xếp FreeRTOS và mật mã học đường cong Elliptic (Curve25519) của WireGuard.</li>
+            <li><b>External PSRAM (4MB Mapped, luôn trống ~3.94 MB)</b>: Chứa toàn bộ 2 Frame Buffer JPEG của Camera và bộ đệm giải mã <code>RGB565 (614 KB)</code> phục vụ Edge AI &amp; vẽ OSD.</li>
+            <li><b>Industrial Heap &amp; Stack Guard</b>: Các bộ đệm cấu hình lớn (như <code>vpn_vault_flash_t</code>) được cấp phát động trên Heap thay vì Stack để bảo vệ tuyệt đối tiến trình <code>main</code>; tự động khởi động lại sạch nếu SRAM nội tụt xuống dưới <code>10 KB</code>.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================================================================== -->
+  <!-- SECTION 3: SMART METER BUSINESS LOGIC (MODES 0..4)                  -->
+  <!-- =================================================================== -->
+  <section id="sec-meter">
+    <div class="sec-head">
+      <span class="sec-num">PHẦN 03</span>
+      <h2>Nghiệp Vụ Đọc Chỉ Số Công Nghiệp (5 Chế Độ Mục Tiêu)</h2>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <h3><span>💡 Mode 1: Đọc Trạng Thái Đèn Báo (Status LED)</span><span class="pill">ISP Profile 1</span></h3>
+        <p style="font-size:13px;color:var(--muted);margin-top:0">
+          Dùng để giám sát đèn báo nguồn, đèn báo lỗi biến tần, tủ điện, bơm nước (<code>ON/OFF</code> và phân biệt màu <b>Đỏ, Xanh lá, Vàng, Xanh dương, Trắng</b>).
+        </p>
+        <ul class="node-list">
+          <li><b>Quang học ISP</b>: Hạ phơi sáng (<code>Brightness = -2</code>, <code>Gain = 2x</code>) để chống lóa halo, giữ nguyên màu nhân đèn LED.</li>
+          <li><b>Tại biên (ESP32)</b>: Tính độ chói đỉnh <code>roi_max_luma</code> và tỷ số trội <code>R/G/B</code> trong thời gian thực (mỗi 2.5 giây).</li>
+          <li><b>Trên Server (.171)</b>: Chuyển đổi sang không gian màu <code>HSV</code>, lọc mặt nạ phát sáng (<code>V &ge; 165, S &ge; 55</code>) và đóng khung từng bóng đèn.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3><span>🔢 Mode 2: Đồng Hồ Số LED 7 Thanh (7-Segment)</span><span class="pill">ISP Profile 1</span></h3>
+        <p style="font-size:13px;color:var(--muted);margin-top:0">
+          Dùng cho đồng hồ nhiệt độ lò sấy, đồng hồ áp suất điện tử, rơ-le bảo vệ điện áp/dòng điện dùng LED 7 đoạn tự phát sáng.
+        </p>
+        <ul class="node-list">
+          <li><b>Xử lý ảnh</b>: Tách kênh màu sáng nhất <code>max(R,G,B)</code>, tăng tương phản cục bộ <code>CLAHE</code> + nhị phân hóa tự động <code>Otsu</code> + phép đóng hình thái học nối liền nét đứt.</li>
+          <li><b>Giải mã Bitmask &amp; Sửa lỗi Hamming</b>: Chuẩn hóa từng chữ số về lưới <code>28x48</code>, kiểm tra mật độ điểm sáng tại 7 thanh <code>(a..g)</code> và đối chiếu khoảng cách <b>Hamming Distance &le; 1</b> để tự sửa khi 1 thanh bị mờ.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3><span>📟 Mode 3: Màn Hình LCD Không Đèn Nền (Điện / Nước / Khí)</span><span class="pill">ISP Profile 2</span></h3>
+        <p style="font-size:13px;color:var(--muted);margin-top:0">
+          Dùng cho công tơ điện tử, đồng hồ nước/khí siêu âm có màn hình tinh thể lỏng chữ đen trên nền xám phản quang.
+        </p>
+        <ul class="node-list">
+          <li><b>Quang học ISP</b>: Cân bằng trắng <code>Office WB</code>, tăng kịch kim độ tương phản (<code>Contrast = +2</code>) và độ sắc nét (<code>Sharpness = +2</code>).</li>
+          <li><b>Nhị phân hóa Kép (Dual-Branch OCR)</b>: Chạy song song <code>Adaptive Gaussian Thresholding (Inverted)</code> và <code>Otsu Inverted</code> sau bước khử bóng mờ <code>CLAHE (clipLimit=3.2)</code>, chọn kết quả có số chữ số hợp lệ và độ tin cậy cao nhất.</li>
+        </ul>
+      </div>
+
+      <div class="card" style="border-color:rgba(245,158,11,0.4)">
+        <h3><span style="color:#fbbf24">🎡 Mode 4: Đồng Hồ Nước Kim Quay &amp; Số Cơ</span><span class="pill warn">ISP Profile 4</span></h3>
+        <p style="font-size:13px;color:var(--muted);margin-top:0">
+          Dành riêng cho đồng hồ nước cơ học có các vòng tròn kim đỏ quay (<code>&times;0.1, &times;0.01, &times;0.001, &times;0.0001 m&sup3;</code>) kết hợp dãy số nguyên.
+        </p>
+        <ul class="node-list">
+          <li><b>Quang học ISP Profile 4</b>: Bật <code>Sunny WB</code> + tăng bão hòa màu <code>Saturation = +2</code> để làm nổi bật kim đỏ trên nền trắng, đồng thời hạ <code>Brightness = -1</code> chống lóa mặt kính ướt.</li>
+          <li><b>Kết hợp Góc Kim Quay + Bộ lọc Lịch sử <code>V(t-1)</code></b>: Khử triệt để lỗi đọc nhầm khi kim chỉ lửng giữa hai vạch hoặc bánh răng số cơ đang lật nửa chừng.</li>
+        </ul>
+      </div>
+
+      <div class="card" style="border-color:rgba(56,189,248,0.45)">
+        <h3><span style="color:#38bdf8">🔄 Mode 5: Đồng Hồ Đa Màn Hình Tự Chuyển Vòng</span><span class="pill ok">MultiScreenCycleTracker</span></h3>
+        <p style="font-size:13px;color:var(--muted);margin-top:0">
+          Dành cho công tơ điện tử đa biểu giá (OBIS <code>1.8.0</code>, <code>1.8.1</code>, <code>1.8.2</code>, <code>V</code>, <code>A</code>, <code>Hz</code>) hoặc đồng hồ nước/lưu lượng điện tử tự động lật trang màn hình theo vòng tròn.
+        </p>
+        <ul class="node-list">
+          <li><b>Dual-Zone OCR &amp; Chống Bóng Ma (Transition Rejection)</b>: Tách riêng mã trang/OBIS và chỉ số chính; tự động loại bỏ khung hình chụp trúng lúc LCD đang chuyển trạng thái giữa 2 trang.</li>
+          <li><b>Bộ nhớ Đa Khe Độc lập (<code>Màn #1..#12</code>)</b>: Lưu từng trang vào khe riêng với khóa đơn điệu chọn lọc (chỉ chặn lùi số cho các trang lũy kế kWh/m&sup3;, cho phép dao động tự do với Điện áp/Lưu lượng tức thời). Hỗ trợ quét trọn vòng bằng <code>GET /api/ai/multi_screen_sweep</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================================================================== -->
+  <!-- SECTION 4: ROTARY DIAL & HISTORICAL STATE-SPACE FILTER V(t-1)       -->
+  <!-- =================================================================== -->
+  <section id="sec-dial">
+    <div class="sec-head">
+      <span class="sec-num">PHẦN 04</span>
+      <h2>Mô Hình Toán Học Đọc Đồng Hồ Kim Quay &amp; Bộ Lọc Lịch Sử <code>V(t-1)</code></h2>
+    </div>
+
+    <div class="card">
+      <h3><span>📐 Ba Tầng Giải Mã &amp; Loại Bỏ Đọc Nhầm Trên Server AI (<code>MeterStateTracker</code>)</span></h3>
+      <div class="steps">
+        <div class="step-item">
+          <div class="step-circle">1</div>
+          <div class="step-body">
+            <b>Tầng 1: Định vị Vòng tròn &amp; Tính Góc Vector Mũi Kim (&theta; &isin; [0&deg;, 360&deg;))</b>
+            <span>
+              Sử dụng biến đổi <code>cv2.HoughCircles</code> (kèm cơ chế chia 4 ô chuẩn dự phòng) để xác định tâm <code>(cx, cy)</code> và bán kính <code>R</code> của 4 đồng hồ con (<code>&times;0.1, &times;0.01, &times;0.001, &times;0.0001</code>). Lọc mặt nạ kim màu đỏ trong không gian HSV, tính vector trọng tâm hướng về mũi kim <code>(vx, vy)</code> và đổi sang góc quay thuận chiều kim đồng hồ tính từ mốc 12 giờ:
+            </span>
+            <div class="formula-box">
+              &theta;_k = (atan2(vx, -vy) &times; 180 / &pi; + 360&deg;) mod 360&deg; &nbsp;&nbsp;&rArr;&nbsp;&nbsp; Giá trị liên tục: f_k = &theta;_k / 36.0 &isin; [0.0, 10.0)
+            </div>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <div class="step-circle">2</div>
+          <div class="step-body">
+            <b>Tầng 2: Khớp Nối Bánh Răng Liên Cấp (Right-to-Left Inter-Dial Gear Carry Coupling)</b>
+            <span>
+              Nếu một kim lớn (ví dụ kim <code>&times;0.1</code>) nằm sát vạch số 5 (<code>f_0 = 4.92</code>), việc làm tròn thông thường rất dễ nhầm giữa <code>4</code> và <code>5</code>. Do hệ bánh răng cơ khí liên kết cứng với nhau, vị trí lẻ của kim lớn <b>bắt buộc phải bằng</b> giá trị của kim nhỏ hơn kế tiếp chia 10 (<code>v_{k+1} / 10</code>). Thuật toán giải mã ngược từ kim nhỏ nhất (<code>&times;0.0001</code>) lên kim lớn nhất (<code>&times;0.1</code>):
+            </span>
+            <div class="formula-box">
+              d_k = floor( f_k - (v_{k+1} / 10.0) + 0.5 ) mod 10
+            </div>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <div class="step-circle">3</div>
+          <div class="step-body">
+            <b>Tầng 3: Bộ Lọc Trạng Thái Lịch Sử &amp; Ràng Buộc Đơn Điệu Vật Lý (<code>MeterStateTracker</code>)</b>
+            <span>
+              Đối chiếu chỉ số ứng viên <code>V_cand</code> với chỉ số hợp lệ liền trước <code>V(t-1)</code> (được lưu bền vững trong <code>meter_state.json</code> hoặc gán từ ô <b>Số Gốc V(t-1)</b> trên Web UI) theo khoảng thời gian <code>&Delta;t = t - t_{t-1}</code> và lưu lượng vật lý tối đa của đường ống <code>Q_max</code> (mặc định <code>50 L/phút = 3.0 m&sup3;/h</code>):
+            </span>
+            <div class="formula-box">
+              0 &le; V(t) - V(t-1) &le; &Delta;V_max &nbsp;&nbsp;với&nbsp;&nbsp; &Delta;V_max = max(0.005, (Q_max / 60000) &times; &Delta;t) [m&sup3;]
+            </div>
+            <span>
+              &bull; <b>VALID_MONOTONIC</b>: Độ tăng nằm trong giới hạn vật lý &rArr; Chấp nhận <code>V(t)</code> và tính lưu lượng tức thời <code>Q(t) = &Delta;V / &Delta;t</code> (Lít/phút).<br>
+              &bull; <b>CLAMPED_JITTER</b>: Kim dao động lùi nhẹ (<code>-8 Lít &le; &Delta;V &lt; 0</code> do búa nước) &rArr; Giữ nguyên <code>V(t) = V(t-1)</code>.<br>
+              &bull; <b>CARRY_CORRECTED</b>: Chữ số hàng nguyên bị mờ/lóa làm nhảy vọt giả tạo &rArr; Giữ nguyên phần nguyên từ <code>V(t-1)</code> (tự động <code>+1 m&sup3;</code> nếu kim <code>&times;0.1</code> vừa quay qua mốc <code>9 &rarr; 0</code>) và ghép với phần thập phân của kim quay.<br>
+              &bull; <b>REJECTED_OUTLIER</b>: Khung hình bị che khuất hoàn toàn &rArr; Bác bỏ nhiễu, bảo toàn chỉ số <code>V(t-1)</code>.
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================================================================== -->
+  <!-- SECTION 5: ANTI-GLARE PWM FLASH & ADAPTIVE READING CADENCE          -->
+  <!-- =================================================================== -->
+  <section id="sec-flash">
+    <div class="sec-head">
+      <span class="sec-num">PHẦN 05</span>
+      <h2>Đèn LED Phụ Bù Sáng Chống Lóa (<code>GPIO 4</code> PWM) &amp; Chu Kỳ Đọc Linh Hoạt</h2>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <h3><span>💡 Tích Hợp Đèn LED Phụ <code>GPIO 4</code> Chống Lóa Mặt Kính</span></h3>
+        <p style="font-size:13px;color:var(--muted);margin-top:0">
+          Đồng hồ nước thường lắp trong hộc tối nhưng lại có mặt kính phẳng phản xạ mạnh. Firmware giải quyết bằng bộ điều khiển <b>PWM 5kHz 8-bit</b>:
+        </p>
+        <ul class="node-list">
+          <li><b>Công suất dịu chống lóa (Mặc định <code>22%</code> ~ <code>55/255</code>)</b>: Đủ làm rực sáng kim màu đỏ mà không tạo đốm trắng (Specular Glare) trên mặt kính.</li>
+          <li><b>Đồng bộ Phơi sáng <code>350ms</code> trước khi chụp (<code>app_flash_pre_capture_assist</code>)</b>:
+            <ol style="padding-left:18px;margin-top:4px">
+              <li>Bật đèn phụ ở mức <code>flash_cap_duty</code> (<code>55/255</code>).</li>
+              <li>Đợi <code>350ms</code> và <b>xả bỏ 1 khung hình DMA cũ</b> để cảm biến OV5640 kịp điều chỉnh phơi sáng (AEC) và cân bằng trắng (AWB).</li>
+              <li>Chụp khung hình chính thức sắc nét.</li>
+              <li><b>Tắt đèn phụ ngay lập tức</b> (<code>0%</code>) sau khi lấy xong khung hình để tiết kiệm điện và không làm nóng mạch.</li>
+            </ol>
+          </li>
+          <li><b>3 Chế độ vận hành (<code>flash_mode</code>)</b>: <code>0 = Tắt tự động</code>, <code>1 = Tự động bật khi tối (ROI Luma &lt; 88)</code>, <code>2 = Luôn bật trước khi chụp</code>.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3><span>⏱️ Chu Kỳ Đọc Linh Hoạt &amp; Tự Động Thích Ứng Lưu Lượng</span></h3>
+        <p style="font-size:13px;color:var(--muted);margin-top:0">
+          Cho phép cấu hình mềm chu kỳ đọc từ <b>15 giây đến 24 giờ (86,400 giây)</b> kết hợp tự động thay đổi tốc độ lấy mẫu theo trạng thái nước chảy:
+        </p>
+        <ul class="node-list">
+          <li><b>Khi khóa nước / Kim đứng yên (Trạng thái Nhàn rỗi)</b>:
+            <ul>
+              <li>Đọc theo chu kỳ chuẩn <code>auto_capture_sec</code> (ví dụ: <b>5 phút, 15 phút, 1 giờ</b> hoặc <b>24 giờ/lần</b>).</li>
+              <li>Sau 25 giây không hoạt động, cảm biến OV5640 tự động vào chế độ <b>Thermal Eco Standby (&lt; 1mA)</b>.</li>
+            </ul>
+          </li>
+          <li><b>Khi mở nước / Kim đang quay (Trạng thái Có lưu lượng)</b>:
+            <ul>
+              <li>Ngay khi Edge AI phát hiện chuyển động quay trong vùng ROI (<code>edge_motion &ge; 3.5%</code>) hoặc Server AI báo lưu lượng <code>flow_lpm &gt; 0.05 L/phút</code>, mạch tự động chuyển sang <b>Chu kỳ đọc nhanh <code>fast_capture_sec</code> (30 giây/lần)</b>.</li>
+              <li>Giúp bám sát từng vòng quay của kim mà không bỏ lỡ bước nhảy số nguyên, sau đó tự quay lại chu kỳ chậm sau 2 phút ngừng chảy.</li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================================================================== -->
+  <!-- SECTION 6: CONNECTION & END-TO-END WORKFLOW                         -->
+  <!-- =================================================================== -->
+  <section id="sec-flow">
+    <div class="sec-head">
+      <span class="sec-num">PHẦN 06</span>
+      <h2>Quy Trình Kết Nối, Căn Chuẩn &amp; Luồng Xử Lý Dữ Liệu</h2>
+    </div>
+
+    <div class="card">
+      <h3><span>🚀 Quy Trình 4 Bước Lắp Đặt &amp; Căn Chuẩn Đồng Hồ Nước Thực Tế</span></h3>
+      <div class="steps">
+        <div class="step-item">
+          <div class="step-circle">1</div>
+          <div class="step-body">
+            <b>Bước 1: Truy cập Giao diện Bàn Quang Học (Qua LAN hoặc VPN)</b>
+            <span>Mở trình duyệt trên điện thoại/máy tính truy cập <code>http://esp32-cam.local</code> (LAN <code>http://10.25.7.100</code>) hoặc qua hầm VPN WireGuard từ bất kỳ đâu tại <code>http://10.212.156.7</code>.</span>
+          </div>
+        </div>
+        <div class="step-item">
+          <div class="step-circle">2</div>
+          <div class="step-body">
+            <b>Bước 2: Lấy nét VCM Theo Đỉnh Nét ROI &amp; Chọn Chế độ Đồng hồ Nước Kim quay</b>
+            <span>Tại cột phải <b>Lấy Nét &amp; ISP</b>, chọn <b>Chế độ 4 - 🎡 Đồng hồ Nước Kim Quay</b>, kéo khung ROI bao quanh mặt số rồi bấm <b>🔬 Quét Đỉnh Nét ROI</b> (<code>af_roi_sweep=1</code>) để mô-tơ VCM tự động dò bước nét nhất bên trong mặt kính đồng hồ và khóa lại.</span>
+          </div>
+        </div>
+        <div class="step-item">
+          <div class="step-circle">3</div>
+          <div class="step-body">
+            <b>Bước 3: Chạm &amp; Kéo Vẽ Khung Ngắm ROI + Bù Góc Xoay Mặt Đồng Hồ (<code>-180&deg;..+180&deg;</code>)</b>
+            <span>Bấm nút <b>✋ Kéo Vẽ ROI</b> trên thanh công cụ video để khoanh vùng mặt đồng hồ. Nếu đồng hồ lắp nghiêng trong hố ga, kéo thanh trượt <b>🔄 Bù Góc Xoay Mặt Đồng Hồ</b> (<code>-180&deg;..+180&deg;</code>) cho tới khi hướng 12 giờ thẳng đứng trên màn hình rồi bấm <b>💾 Lưu Tọa Độ Khung ROI Vào Bộ Nhớ NVS</b>.</span>
+          </div>
+        </div>
+        <div class="step-item">
+          <div class="step-circle">4</div>
+          <div class="step-body">
+            <b>Bước 4: Nhập Số Gốc <code>V(t-1)</code>, Chọn Chu Kỳ Đọc &amp; Giám Sát Rò Rỉ / Xuất Báo Cáo CSV</b>
+            <span>Nhập chỉ số hiện tại trên mặt đồng hồ vào ô <b>📌 Căn Chuẩn Số Gốc V(t-1)</b> (ví dụ: <code>00125.4320</code>) rồi bấm <b>📌 Gán Số Gốc</b>. Chọn chu kỳ đọc mong muốn (ví dụ: <b>Mỗi 5 phút</b> + bật <b>⚡ Tăng tốc 30s khi nước chảy</b>). Giao diện sẽ vẽ biểu đồ lưu lượng trực tiếp, cảnh báo khi nghi rò rỉ ngầm và cho phép tải <b>📥 Xuất CSV</b> chuẩn Excel bất cứ lúc nào.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================================================================== -->
+  <!-- SECTION 7: REST API & MQTT REFERENCE                                -->
+  <!-- =================================================================== -->
+  <section id="sec-api">
+    <div class="sec-head">
+      <span class="sec-num">PHẦN 07</span>
+      <h2>Danh Mục Giao Tiếp HTTP REST API &amp; MQTT Topics</h2>
+    </div>
+
+    <div class="card">
+      <h3><span>📡 Bảng API Trên Mạch ESP32-CAM (<code>10.25.7.100</code> / <code>10.212.156.7</code>)</span></h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th>Method</th>
+              <th>Chức Năng &amp; Tham Số Điều Khiển</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/status</code></td>
+              <td><code>GET</code></td>
+              <td>Trả về JSON toàn bộ trạng thái sức khỏe mạch, nhiệt độ, điện áp, RAM/PSRAM, WireGuard (<code>wg_vault</code>), kết quả Edge AI, Server AI (<code>last_ai</code>), công suất đèn phụ <code>flash_duty</code> và đếm ngược chu kỳ đọc <code>next_cap_sec</code>.</td>
+            </tr>
+            <tr>
+              <td><code>/stream</code> (cổng 80 &amp; 81)<br><code>/snapshot</code></td>
+              <td><code>GET</code></td>
+              <td><code>/stream</code>: Luồng video MJPEG thời gian thực.<br><code>/snapshot</code>: Ảnh tĩnh tức thời có đóng dấu OSD (siêu tiết kiệm băng thông khi xem qua 4G/WireGuard).</td>
+            </tr>
+            <tr>
+              <td><code>/capture?mode=meter_read</code></td>
+              <td><code>GET</code></td>
+              <td>Kích hoạt chu trình đầy đủ: Đánh thức OV5640 &rarr; Bật đèn phụ PWM chống lóa (350ms AE/AWB) &rarr; Chụp &amp; Tắt đèn &rarr; Đóng dấu OSD &rarr; Lưu thẻ nhớ SD &rarr; Đẩy FTP (.171) &rarr; Phân tích AI &amp; Lọc lịch sử <code>V(t-1)</code> &rarr; Phát MQTT &amp; Ntfy.</td>
+            </tr>
+            <tr>
+              <td><code>/control?var=&lt;k&gt;&amp;val=&lt;v&gt;</code></td>
+              <td><code>GET</code></td>
+              <td>
+                &bull; <code>meter_mode=0..4</code>, <code>meter_baseline=00125.4320</code>, <code>roi_x</code>, <code>roi_y</code>, <code>roi_w</code>, <code>roi_h</code>, <code>roi_save=1</code><br>
+                &bull; <code>flash_mode=0..2</code>, <code>flash_cap_duty=15..255</code>, <code>flash_duty=0..255</code><br>
+                &bull; <code>auto_capture_sec=0..86400</code>, <code>adaptive_cycle=0|1</code>, <code>fast_capture_sec=5..3600</code><br>
+                &bull; <code>focus=0..1023</code>, <code>af_trigger=1</code>, <code>isp_profile=0..4</code>, <code>eco_mode=0|1</code>
+              </td>
+            </tr>
+            <tr>
+              <td><code>/api/wireguard</code></td>
+              <td><code>GET / POST</code></td>
+              <td>Đọc hoặc nạp cấu hình chuẩn <code>.conf</code> WireGuard trực tiếp vào phân vùng bất tử <code>vpn_vault @ 0x3FC000</code> + NVS + <code>/sdcard/wg_vault.conf</code>.</td>
+            </tr>
+            <tr>
+              <td><code>/api/ota/upload</code><br><code>/api/ota/pull</code><br><code>/api/ota/rollback</code></td>
+              <td><code>POST</code></td>
+              <td>Cập nhật Firmware Dual-OTA qua trình duyệt, tự động kéo bản build mới từ <code>http://10.25.7.171:8095/firmware/cam_streamer.bin</code> hoặc khôi phục về phân vùng dự phòng.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span>🧠 Bảng API Trên Server AI RK3576 (<code>http://10.25.7.171:8095</code>) &amp; MQTT Topics</span></h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Kênh / Endpoint</th>
+              <th>Loại</th>
+              <th>Mô Tả Nghiệp Vụ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>POST /api/analyze</code></td>
+              <td>HTTP REST</td>
+              <td>Nhận ảnh JPEG từ ESP32-CAM kèm tọa độ ROI và <code>baseline</code>, chạy YOLOv8n NPU + 4 bộ đọc đồng hồ + bộ lọc trạng thái <code>MeterStateTracker</code>, lưu ảnh đã vẽ vector kim quay vào <code>/annotated/</code>.</td>
+            </tr>
+            <tr>
+              <td><code>POST /api/meter/calibrate</code></td>
+              <td>HTTP REST</td>
+              <td><code>?device=esp32-cam&amp;baseline=00125.4320</code> — Căn chuẩn lại chỉ số gốc <code>V(t-1)</code> trong <code>meter_state.json</code>.</td>
+            </tr>
+            <tr>
+              <td><code>esp32cam/telemetry</code><br><code>esp32cam/capture</code><br><code>esp32cam/meter_reading</code></td>
+              <td>MQTT Publish</td>
+              <td>Các gói JSON thời gian thực gửi lên Broker <code>10.25.7.171:1883</code> để tích hợp vào Home Assistant, Node-RED hoặc hệ thống SCADA/BMS.</td>
+            </tr>
+            <tr>
+              <td><code>esp32cam/cmd</code></td>
+              <td>MQTT Subscribe</td>
+              <td>Gửi chuỗi <code>capture</code>, <code>af</code>, <code>reboot</code> hoặc <code>focus:820</code> để điều khiển ESP32-CAM từ xa qua MQTT.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================================================================== -->
+  <!-- SECTION 8: BUILD, DEPLOY, OTA & INDUSTRIAL RESCUE                   -->
+  <!-- =================================================================== -->
+  <section id="sec-ops">
+    <div class="sec-head">
+      <span class="sec-num">PHẦN 08</span>
+      <h2>Hướng Dẫn Biên Dịch, Nạp Firmware &amp; Cơ Chế Cứu Hộ Công Nghiệp</h2>
+    </div>
+
+    <div class="card">
+      <h3><span>🛠️ Lệnh Biên Dịch &amp; Đóng Gói 1 Bước Trực Tiếp Trên Máy Chính Windows</span></h3>
+      <pre># Đóng gói giao diện Web mô-đun (style.css + body.html + app.js -> index.html -> web_ui.h Gzip)
+# + Biên dịch ESP-IDF v5.5.1 cục bộ + Đồng bộ AI Server (.171) + Đẩy OTA không dây sang ESP32-CAM:
+python tools/deploy.py
+
+# Các tùy chọn nhanh:
+python tools/deploy.py --ui-only       # Chỉ đóng gói giao diện Web UI
+python tools/deploy.py --build-only    # Chỉ biên dịch kiểm tra mã nguồn C
+python tools/deploy.py --ai-only       # Chỉ cập nhật esp32cam_ai_server.py lên Server 10.25.7.171</pre>
+
+      <div class="callout ok">
+        <b>🛡️ Bảo vệ Kết nối VPN Tuyệt đối khi Nạp/OTA:</b> Lệnh <code>idf.py flash</code> và quá trình cập nhật OTA chỉ ghi vào vùng <code>0x1000..0x3EFFFF</code>, hoàn toàn không chạm tới phân vùng <code>vpn_vault @ 0x3FC000</code>. Ngay sau khi nạp xong và khởi động lại, mạch tự động khôi phục khóa WireGuard và kết nối lại IP <code>10.212.156.7</code>.
+      </div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

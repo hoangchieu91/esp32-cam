@@ -1,0 +1,36 @@
+idf_component_register(
+    SRCS
+        "cam_streamer.c"
+        "hw_peripherals.c"
+        "app_httpd.c"
+        "httpd_ota_sys.c"
+        "httpd_ai_mcp.c"
+        "app_config.c"
+        "osd_stamp.c"
+        "net_services.c"
+        "app_wireguard.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        esp_http_server
+        esp_http_client
+        mqtt
+        json
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        esp_timer
+        fatfs
+        sdmmc
+        vfs
+        driver
+        esp_psram
+        mdns
+        app_update
+        bootloader_support
+        trombik__esp_wireguard
+        lwip
+        spi_flash
+        esp_partition
+)

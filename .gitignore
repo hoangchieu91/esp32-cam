@@ -1,0 +1,23 @@
+# System & IDE
+.DS_Store
+.vscode/
+.idea/
+Thumbs.db
+
+# ESP-IDF Build Artifacts
+build/
+**/build/
+sdkconfig.old
+**/sdkconfig.old
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+dist/
