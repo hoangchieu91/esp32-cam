@@ -476,23 +476,24 @@ class SmartMeterVisionEngine:
         conf_sum = 0.0
         valid_cnt = 0
 
-        # 1. Direct Red Pointer Hub-to-Tip Distance Transform Detector (lower dial arc y >= 0.34*rh)
+        # 1. Direct Red Pointer Hub-to-Tip Distance Transform Detector (lower dial arc y >= 0.43*rh)
         hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
         hc, sc, vc = cv2.split(hsv)
         red_mask = (((hc <= 16) | (hc >= 160)) & (sc >= 40) & (vc >= 38)).astype(np.uint8) * 255
-        red_mask[:int(rh * 0.34), :] = 0
+        # Mask out upper horizontal roller drum zone (H 00304 m3 sits at y ~ 0.25..0.41*rh)
+        red_mask[:int(rh * 0.43), :] = 0
         red_mask[:, :3] = 0
         red_mask[:, max(0, rw - 3):] = 0
         k_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, k_el)
         cnts, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        red_pointers = []
+        raw_red_cands = []
         for c in cnts:
             area = cv2.contourArea(c)
-            if 45 <= area <= 4500:
+            if 150 <= area <= 5500:
                 x, y, bw, bh = cv2.boundingRect(c)
-                if bw < 6 or bh < 6:
+                if bw < 10 or bh < 10:
                     continue
                 m_patch = np.zeros((bh + 4, bw + 4), dtype=np.uint8)
                 cv2.drawContours(m_patch, [c - [x - 2, y - 2]], -1, 255, -1)
@@ -505,9 +506,17 @@ class SmartMeterVisionEngine:
                 tip_pt = pts[int(np.argmax(d2))]
                 tx_i, ty_i = int(tip_pt[0]), int(tip_pt[1])
                 vx, vy = float(tx_i - cx_i), float(ty_i - cy_i)
-                r_i = int(max(10, round(np.hypot(vx, vy))))
+                r_i = int(max(12, round(np.hypot(vx, vy))))
                 ang = (float(np.degrees(np.arctan2(vx, -vy))) + 360.0) % 360.0
-                red_pointers.append((cx_i, cy_i, tx_i, ty_i, r_i, round(ang, 1), 0.92))
+                raw_red_cands.append((cx_i, cy_i, tx_i, ty_i, r_i, round(ang, 1), 0.92, area))
+
+        red_pointers = []
+        if raw_red_cands:
+            max_ptr_area = max(p[7] for p in raw_red_cands)
+            red_pointers = [
+                p[:7] for p in raw_red_cands
+                if p[7] >= max(180.0, 0.42 * max_ptr_area)
+            ]
 
         if len(red_pointers) >= 2:
             # Sort along standard rotary water meter arc: Right-to-Left (x descending)
@@ -830,7 +839,15 @@ class SmartMeterVisionEngine:
                 mat = cv2.getRotationMatrix2D((rw_sub / 2.0, rh_sub / 2.0), float(-r_deg), 1.0)
                 roi = cv2.warpAffine(roi, mat, (rw_sub, rh_sub), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
-        led_res = cls.analyze_led_indicators(roi)
+        if int(mode) in (3, 4, 5):
+            led_res = {
+                "status": "OFF",
+                "detail": "Chế độ đồng hồ (Đã lọc phản quang mặt kính)",
+                "boxes": [],
+                "led_array": []
+            }
+        else:
+            led_res = cls.analyze_led_indicators(roi)
         seg7_res = cls.analyze_7segment(roi)
         lcd_res = cls.analyze_lcd_meter(roi)
         dial_res = cls.analyze_dial_water_meter(roi, lcd_res)
@@ -962,7 +979,10 @@ class MeterStateTracker:
             prev_val = st.get("last_value", None)
             prev_ts = st.get("last_epoch", now_ts - 60.0)
             prev_flow = float(st.get("flow_lpm", 0.0))
+            prev_pending = st.get("pending_cand", None)
             dt_sec = max(1.0, now_ts - float(prev_ts))
+            new_valid_epoch = prev_ts
+            new_pending = None
 
             # Maximum physically possible volume delta (m3) in dt_sec
             # 1 L = 0.001 m3 -> Q_max (m3/s) = (max_flow_lpm / 60.0) * 0.001
@@ -990,7 +1010,7 @@ class MeterStateTracker:
                 prev_int = int(np.floor(prev_val))
                 prev_frac = prev_val - prev_int
                 # Check if x0.1 pointer wrapped around from 9 -> 0
-                if raw_frac < (prev_frac - 0.55) and (1.0 + raw_frac - prev_frac) <= max_delta_m3:
+                if raw_frac < (prev_frac - 0.55) and (1.0 + raw_frac - prev_frac) <= max(1.0, max_delta_m3):
                     prev_int += 1
                 cand_val = float(prev_int) + raw_frac
             elif ocr_val is not None:
@@ -1014,6 +1034,7 @@ class MeterStateTracker:
                 final_val = round(cand_val, 4)
                 flow_lpm = 0.0
                 f_state = "INIT_SEED"
+                new_valid_epoch = now_ts
                 detail = f"Khởi tạo V(0)={final_val:.4f} m³ | Kim: .{dial_digits}"
             elif cand_val is None:
                 # Hold previous valid value when frame is blurred/occluded
@@ -1023,17 +1044,29 @@ class MeterStateTracker:
                 detail = f"Giữ số cũ V(t-1)={final_val:.4f} m³ (Ảnh mờ/Che khuất)"
             else:
                 delta = cand_val - prev_val
-                if 0.0 <= delta <= max_delta_m3:
+                # Check 2-frame forward consensus (when camera was offline while water flowed forward)
+                is_forward_consensus = (
+                    0.0 < delta <= 15.0
+                    and prev_pending is not None
+                    and abs(cand_val - float(prev_pending)) <= 0.025
+                )
+                if 0.0 <= delta <= max_delta_m3 or is_forward_consensus:
                     final_val = round(cand_val, 4)
-                    inst_flow_lpm = (delta * 1000.0) / (dt_sec / 60.0)
-                    flow_lpm = round(0.6 * inst_flow_lpm + 0.4 * prev_flow, 2)
+                    if is_forward_consensus and delta > max_delta_m3:
+                        flow_lpm = 0.0
+                        detail = f"Đồng bộ bù (+{delta*1000:.1f} L) | Kim: .{dial_digits}"
+                    else:
+                        inst_flow_lpm = (delta * 1000.0) / max(0.5, dt_sec / 60.0)
+                        flow_lpm = round(min(max_flow_lpm, 0.6 * inst_flow_lpm + 0.4 * prev_flow), 2)
+                        detail = f"Hợp lệ (+{delta*1000:.1f} L / {int(dt_sec)}s) | Kim: .{dial_digits}"
                     f_state = "VALID_MONOTONIC"
-                    detail = f"Hợp lệ (+{delta*1000:.1f} L / {int(dt_sec)}s) | Kim: .{dial_digits}"
+                    new_valid_epoch = now_ts
                 elif -0.008 <= delta < 0.0:
                     # Minor pointer jitter / water hammer back-oscillation -> clamp to V(t-1)
                     final_val = round(prev_val, 4)
                     flow_lpm = 0.0
                     f_state = "CLAMPED_JITTER"
+                    new_valid_epoch = now_ts
                     detail = f"Khử rung kim ({delta*1000:.1f}L -> Giữ {final_val:.4f} m³)"
                 else:
                     # Outlier jump (delta < -0.008 or delta > max_delta_m3):
@@ -1049,11 +1082,14 @@ class MeterStateTracker:
                         inst_flow_lpm = (rec_delta * 1000.0) / (dt_sec / 60.0)
                         flow_lpm = round(0.6 * inst_flow_lpm + 0.4 * prev_flow, 2)
                         f_state = "CARRY_CORRECTED"
+                        new_valid_epoch = now_ts
                         detail = f"Đã lọc nhiễu số cơ bằng V(t-1) (+{rec_delta*1000:.1f}L) | Kim: .{dial_digits}"
                     else:
                         final_val = round(prev_val, 4)
                         flow_lpm = round(prev_flow * 0.5, 2)
                         f_state = "REJECTED_OUTLIER"
+                        if 0.0 < delta <= 15.0:
+                            new_pending = round(cand_val, 4)
                         detail = f"Bác bỏ đọc nhầm ({cand_val:.3f}) -> Bảo toàn {final_val:.4f} m³"
 
             flow_streak = int(st.get("flow_streak", 0))
@@ -1070,7 +1106,8 @@ class MeterStateTracker:
 
             self.states[device] = {
                 "last_value": final_val,
-                "last_epoch": now_ts,
+                "last_epoch": new_valid_epoch,
+                "pending_cand": new_pending,
                 "flow_lpm": flow_lpm,
                 "flow_streak": flow_streak,
                 "leak_alert": leak_alert,
@@ -1080,8 +1117,10 @@ class MeterStateTracker:
             }
             self._save()
 
+            n_dec = len(dial_digits) if (dial_digits and dial_digits != "----" and len(dial_digits) in (3, 4)) else 4
+            fmt_str = f"{final_val:08.3f}" if n_dec == 3 else f"{final_val:09.4f}"
             return {
-                "formatted_value": f"{final_val:09.4f}",
+                "formatted_value": fmt_str,
                 "detail": detail,
                 "flow_lpm": flow_lpm,
                 "filter_state": f_state,
@@ -1340,7 +1379,7 @@ class RK3576YoloEngine:
         brightness = float(np.mean(gray))
 
         detections = []
-        if self.ready:
+        if self.ready and int(mode) not in (2, 3, 4, 5):
             with self.lock:
                 resized = cv2.resize(img_bgr, (640, 640))
                 rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
@@ -1490,26 +1529,64 @@ def draw_annotations(img_bgr: np.ndarray, analysis: Dict[str, Any]) -> np.ndarra
     canvas = img_bgr.copy()
     mb = analysis.get("_meter_boxes") or {}
     roi_rect = mb.get("roi_rect")
+    r_deg = int(mb.get("rot_deg", 0))
     if roi_rect and len(roi_rect) == 4:
         rx, ry, rw, rh = roi_rect
-        cv2.rectangle(canvas, (rx, ry), (rx + rw, ry + rh), (180, 255, 0), 2)
-        hdr = f"ROI | Dial:{mb.get('dial_value','----')}m3 | LCD:{mb.get('lcd_value','--')} | LED:{mb.get('led_status','OFF')}"
-        cv2.putText(canvas, hdr, (rx, max(18, ry - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 255, 0), 2)
+        roi_sub = canvas[ry:ry+rh, rx:rx+rw].copy()
+        if abs(r_deg) >= 1 and roi_sub.size > 0:
+            if -95 <= r_deg <= -85:
+                roi_sub = cv2.rotate(roi_sub, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            elif 85 <= r_deg <= 95:
+                roi_sub = cv2.rotate(roi_sub, cv2.ROTATE_90_CLOCKWISE)
+            elif abs(r_deg) >= 175:
+                roi_sub = cv2.rotate(roi_sub, cv2.ROTATE_180)
+            else:
+                sh, sw = roi_sub.shape[:2]
+                mat = cv2.getRotationMatrix2D((sw / 2.0, sh / 2.0), float(-r_deg), 1.0)
+                roi_sub = cv2.warpAffine(roi_sub, mat, (sw, sh), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
         for bx, by, bw, bh in mb.get("led_boxes", []):
-            cv2.rectangle(canvas, (rx + bx, ry + by), (rx + bx + bw, ry + by + bh), (0, 0, 255), 2)
+            cv2.rectangle(roi_sub, (bx, by), (bx + bw, by + bh), (0, 0, 255), 2)
         for bx, by, bw, bh in mb.get("seg7_boxes", []):
-            cv2.rectangle(canvas, (rx + bx, ry + by), (rx + bx + bw, ry + by + bh), (0, 255, 255), 1)
+            cv2.rectangle(roi_sub, (bx, by), (bx + bw, by + bh), (0, 255, 255), 1)
         for bx, by, bw, bh in mb.get("lcd_boxes", []):
-            cv2.rectangle(canvas, (rx + bx, ry + by), (rx + bx + bw, ry + by + bh), (255, 200, 0), 1)
+            cv2.rectangle(roi_sub, (bx, by), (bx + bw, by + bh), (255, 200, 0), 1)
         for d in mb.get("dials", []):
             cx, cy = d.get("center", [0, 0])
             tx, ty = d.get("tip", [0, 0])
             rad = int(d.get("radius", 12))
             dig = d.get("digit", "-")
-            cv2.circle(canvas, (rx + cx, ry + cy), rad, (0, 215, 255), 1)
-            cv2.arrowedLine(canvas, (rx + cx, ry + cy), (rx + tx, ry + ty), (0, 69, 255), 2, tipLength=0.25)
-            cv2.putText(canvas, str(dig), (rx + cx - 5, ry + cy + rad + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 215, 255), 1)
+            cv2.circle(roi_sub, (cx, cy), rad, (0, 215, 255), 2)
+            cv2.arrowedLine(roi_sub, (cx, cy), (tx, ty), (0, 255, 0), 2, tipLength=0.28)
+            cv2.putText(roi_sub, f"D{d.get('index',0)+1}:{dig}", (max(2, cx - 22), max(16, cy - rad - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255), 2)
+
+        # If meter is rotated 90/180 deg, orient the whole annotated image upright so human inspection matches ROI coordinates
+        if -95 <= r_deg <= -85:
+            orig_h, orig_w = canvas.shape[:2]
+            canvas = cv2.rotate(canvas, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            nrx, nry = ry, orig_w - (rx + rw)
+            nrw, nrh = rh, rw
+            canvas[nry:nry+nrh, nrx:nrx+nrw] = roi_sub
+            rx, ry, rw, rh = nrx, nry, nrw, nrh
+        elif 85 <= r_deg <= 95:
+            orig_h, orig_w = canvas.shape[:2]
+            canvas = cv2.rotate(canvas, cv2.ROTATE_90_CLOCKWISE)
+            nrx, nry = orig_h - (ry + rh), rx
+            nrw, nrh = rh, rw
+            canvas[nry:nry+nrh, nrx:nrx+nrw] = roi_sub
+            rx, ry, rw, rh = nrx, nry, nrw, nrh
+        elif abs(r_deg) >= 175:
+            orig_h, orig_w = canvas.shape[:2]
+            canvas = cv2.rotate(canvas, cv2.ROTATE_180)
+            nrx, nry = orig_w - (rx + rw), orig_h - (ry + rh)
+            canvas[nry:nry+rh, nrx:nrx+rw] = roi_sub
+            rx, ry = nrx, nry
+        else:
+            canvas[ry:ry+rh, rx:rx+rw] = roi_sub
+
+        cv2.rectangle(canvas, (rx, ry), (rx + rw, ry + rh), (180, 255, 0), 2)
+        hdr = f"ROI | Dial:{mb.get('dial_value','----')}m3 | Flow:{mb.get('flow_lpm',0)}L/m"
+        cv2.putText(canvas, hdr, (max(4, rx), max(18, ry - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (180, 255, 0), 2)
 
     for det in analysis.get("objects", []):
         x, y, w, h = det["box"]
@@ -1875,10 +1952,18 @@ async def api_ai_crop_display(
     x0, y0, r_w, r_h = SmartMeterVisionEngine.get_roi_rect(w, h, rx, ry, rw, rh)
     roi = img[y0:y0+r_h, x0:x0+r_w].copy()
 
-    if abs(int(rot)) >= 1 and roi.size > 0:
-        sh, sw = roi.shape[:2]
-        mat = cv2.getRotationMatrix2D((sw / 2.0, sh / 2.0), float(-rot), 1.0)
-        roi = cv2.warpAffine(roi, mat, (sw, sh), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    r_deg = int(rot)
+    if abs(r_deg) >= 1 and roi.size > 0:
+        if -95 <= r_deg <= -85:
+            roi = cv2.rotate(roi, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        elif 85 <= r_deg <= 95:
+            roi = cv2.rotate(roi, cv2.ROTATE_90_CLOCKWISE)
+        elif abs(r_deg) >= 175:
+            roi = cv2.rotate(roi, cv2.ROTATE_180)
+        else:
+            sh, sw = roi.shape[:2]
+            mat = cv2.getRotationMatrix2D((sw / 2.0, sh / 2.0), float(-r_deg), 1.0)
+            roi = cv2.warpAffine(roi, mat, (sw, sh), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
 
     if enhance and roi.size > 0:
         # Upscale 2x + CLAHE local contrast enhancement for crisp LCD/OLED/7-Seg readability

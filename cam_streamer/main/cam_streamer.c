@@ -671,10 +671,10 @@ void app_apply_target_preset(const char *preset) {
         g_cfg.auto_capture_sec = 300;
         g_cfg.adaptive_cycle_enable = true;
         g_cfg.fast_capture_sec = 30;
-        g_cfg.roi_x_pct = 14;
-        g_cfg.roi_y_pct = 10;
-        g_cfg.roi_w_pct = 72;
-        g_cfg.roi_h_pct = 76;
+        g_cfg.roi_x_pct = 8;
+        g_cfg.roi_y_pct = 3;
+        g_cfg.roi_w_pct = 84;
+        g_cfg.roi_h_pct = 94;
     } else if (strcmp(preset, "debug_board") == 0) {
         g_cfg.meter_mode = 1;        // PCB LEDs + Display Multi-Target Probe
         app_apply_cam_isp_profile(0); // True-color Balanced Auto for Red/Green/Yellow/Blue LEDs

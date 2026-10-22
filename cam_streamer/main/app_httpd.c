@@ -116,6 +116,13 @@ static esp_err_t execute_capture_pipeline(const char *mode, char *out_filename, 
     }
     if (out_filename) snprintf(out_filename, fn_len, "%s", base_name);
 
+    // Keep clean un-drawn JPEG copy in PSRAM for AI Server analysis (free of OSD text/green ROI lines)
+    size_t raw_len = fb->len;
+    uint8_t *raw_buf = (uint8_t *)heap_caps_malloc(raw_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (raw_buf) {
+        memcpy(raw_buf, fb->buf, raw_len);
+    }
+
     // Burn OSD Timestamp & run Edge AI
     uint8_t *jpg_buf = NULL;
     size_t jpg_len = 0;
@@ -127,17 +134,17 @@ static esp_err_t execute_capture_pipeline(const char *mode, char *out_filename, 
     size_t work_len = jpg_len;
     if (jpg_allocated) {
         work_buf = jpg_buf;
-    } else {
-        work_buf = (uint8_t *)heap_caps_malloc(fb->len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (work_buf) {
-            memcpy(work_buf, fb->buf, fb->len);
-            work_len = fb->len;
-        }
+    } else if (raw_buf) {
+        work_buf = raw_buf;
+        work_len = raw_len;
     }
     esp_camera_fb_return(fb);
     if (s_cam_mutex) xSemaphoreGive(s_cam_mutex);
 
-    if (!work_buf) return ESP_FAIL;
+    if (!work_buf) {
+        if (raw_buf) free(raw_buf);
+        return ESP_FAIL;
+    }
 
     bool ai_only = (mode && (strcmp(mode, "ai_only") == 0 || strcmp(mode, "debug_board") == 0));
 
@@ -174,11 +181,16 @@ static esp_err_t execute_capture_pipeline(const char *mode, char *out_filename, 
     if (out_ftp_st) snprintf(out_ftp_st, ftp_len, "%s", ftp_err);
     s_last_capture_ms = (uint32_t)((esp_timer_get_time() - t_start_us) / 1000LL);
 
-    // 3. Push to Deep AI Server (10.25.7.171:8095) — Heap-allocated to protect httpd stack
+    // 3. Push clean un-drawn frame to Deep AI Server (10.25.7.171:8095)
     char *ai_resp = (char *)calloc(1, 2048);
     esp_err_t ai_ret = ESP_FAIL;
     if (ai_resp) {
-        ai_ret = net_ai_server_analyze(work_buf, work_len, base_name, ai_resp, 2048);
+        const uint8_t *ai_img = raw_buf ? raw_buf : work_buf;
+        size_t ai_len = raw_buf ? raw_len : work_len;
+        ai_ret = net_ai_server_analyze(ai_img, ai_len, base_name, ai_resp, 2048);
+    }
+    if (raw_buf && raw_buf != work_buf) {
+        free(raw_buf);
     }
 
     // 4. Publish Real-Time MQTT Event
