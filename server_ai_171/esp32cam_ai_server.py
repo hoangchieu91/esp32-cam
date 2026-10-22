@@ -1050,19 +1050,24 @@ class MeterStateTracker:
                 st = dict(self.states.get("esp32-cam") or self.states.get("default") or {})
                 if st:
                     self.states[device] = st
-            # If user supplied a new baseline seed from ESP32 UI, anchor to it
+            # If user supplied a new baseline seed from ESP32 UI, anchor to it ONLY if we don't already have a higher validated reading
             if baseline_str and baseline_str.strip():
                 b_val = self._parse_float(baseline_str)
+                cur_last = st.get("last_value")
                 if b_val is not None and st.get("baseline_seed") != baseline_str.strip():
-                    st = {
-                        "last_value": round(b_val, 4),
-                        "last_epoch": now_ts,
-                        "flow_lpm": 0.0,
-                        "baseline_seed": baseline_str.strip(),
-                        "updated_at": now_vn_str()
-                    }
-                    self.states[device] = st
-                    self._save()
+                    if cur_last is None or b_val >= float(cur_last):
+                        st = {
+                            "last_value": round(b_val, 4),
+                            "last_epoch": now_ts,
+                            "flow_lpm": 0.0,
+                            "baseline_seed": baseline_str.strip(),
+                            "updated_at": now_vn_str()
+                        }
+                        self.states[device] = st
+                        self._save()
+                    else:
+                        st["baseline_seed"] = baseline_str.strip()
+                        self._save()
 
             prev_val = st.get("last_value", None)
             prev_ts = st.get("last_epoch", now_ts - 60.0)
@@ -1781,14 +1786,14 @@ def ftp_inbox_watcher():
     while True:
         try:
             for p in sorted(FTP_INBOX_DIR.glob("*.jpg")):
-                if p.name not in seen and (time.time() - p.stat().st_mtime) >= 4.0:
+                if p.name not in seen and (time.time() - p.stat().st_mtime) >= 10.0:
                     seen.add(p.name)
-                    if any(h.get("file") == p.name for h in history_list[:20]):
+                    if any(h.get("file") == p.name for h in history_list[:30]):
                         continue
                     data = p.read_bytes()
                     if len(data) > 1024:
-                        print(f"[+] FTP Watcher analyzing new file: {p.name}")
-                        process_and_record_image(data, p.name, "ftp_upload")
+                        print(f"[+] FTP Watcher analyzing fallback file: {p.name}")
+                        process_and_record_image(data, p.name, "ftp_upload", rx=8, ry=3, rw=84, rh=94, mode=4, rot_deg=-90)
         except Exception as e:
             print(f"[-] FTP watcher err: {e}")
         time.sleep(2)
