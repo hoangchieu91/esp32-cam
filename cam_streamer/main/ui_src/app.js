@@ -405,18 +405,230 @@ async function runRoiFocusSweep() {
   }
 }
 
-function updateFlowSparkline(flowLpm, leakAlert) {
-  flowHistoryPts.push(Number(flowLpm) || 0);
-  if (flowHistoryPts.length > 24) flowHistoryPts.shift();
-  const maxVal = Math.max(5.0, ...flowHistoryPts);
-  const pts = flowHistoryPts.map((v, i) => {
-    const x = Math.round((i / (flowHistoryPts.length - 1)) * 360);
-    const y = Math.round(38 - (Math.min(v, maxVal) / maxVal) * 32);
-    return `${x},${y}`;
-  }).join(' ');
-  const poly = document.getElementById('flow-spark-poly');
-  if (poly) poly.setAttribute('points', pts);
+let meterChartMode = 'hourly'; // 'hourly' | 'daily' | 'avg'
+let meterChartUnit = 'L';      // 'L' | 'm3'
+let meterAnalyticsData = null;
+let lastAnalyticsFetchTs = 0;
+let selectedChartColIdx = -1;
 
+function formatVol(liters) {
+  const v = Number(liters) || 0;
+  if (meterChartUnit === 'm3') {
+    return (v / 1000).toFixed(v >= 1000 ? 2 : 3) + ' m³';
+  }
+  return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' L';
+}
+
+function formatVolShort(liters) {
+  const v = Number(liters) || 0;
+  if (v <= 0) return '';
+  if (meterChartUnit === 'm3') {
+    return (v / 1000).toFixed(2);
+  }
+  return v >= 1000 ? (v / 1000).toFixed(1) + 'k' : (v >= 10 ? v.toFixed(0) : v.toFixed(1));
+}
+
+function formatDateVNShort(dStr) {
+  if (!dStr || dStr.length < 10) return dStr || '--';
+  return `${dStr.slice(8, 10)}/${dStr.slice(5, 7)}`;
+}
+
+function toggleChartUnit() {
+  meterChartUnit = (meterChartUnit === 'L') ? 'm3' : 'L';
+  const btn = document.getElementById('btn-chart-unit');
+  if (btn) btn.textContent = meterChartUnit === 'L' ? '💧 Đơn vị: Lít (L)' : '📦 Đơn vị: Khối (m³)';
+  renderMeterBarChart();
+}
+
+function setMeterChartMode(mode) {
+  meterChartMode = mode;
+  selectedChartColIdx = -1;
+  ['hourly', 'daily', 'avg'].forEach(m => {
+    const b = document.getElementById('chart-mode-' + m);
+    if (b) b.classList.toggle('active', m === mode);
+  });
+  const leg = document.getElementById('chart-legend-lbl');
+  if (leg) {
+    if (mode === 'hourly') leg.textContent = '🟦 Ngày A | 🟪 Ngày B | 🟨 Giờ cao điểm';
+    else if (mode === 'daily') leg.textContent = '🟦 Tiêu thụ từng ngày trong tháng | 🟨 Ngày cao điểm';
+    else leg.textContent = '🟦 Giờ Ngày A | 🟪 Trung bình cùng giờ trong tháng';
+  }
+  renderMeterBarChart();
+}
+
+async function fetchFromAiServer(pathAndQuery) {
+  const hosts = ['http://10.25.7.171:8095', 'http://100.117.215.125:8095'];
+  for (const h of hosts) {
+    try {
+      const r = await fetch(h + pathAndQuery);
+      if (r.ok) return await r.json();
+    } catch (e) {}
+  }
+  return null;
+}
+
+async function loadMeterAnalytics(force = false) {
+  const now = Date.now();
+  if (!force && (now - lastAnalyticsFetchTs) < 20000 && meterAnalyticsData) {
+    return;
+  }
+  lastAnalyticsFetchTs = now;
+  const sn = (document.getElementById('inp-meter-serial')?.value || '00000198').trim();
+  const selA = document.getElementById('sel-chart-date-a');
+  const selB = document.getElementById('sel-chart-date-b');
+  const dateA = selA ? selA.value : '';
+  const dateB = selB ? selB.value : '';
+
+  const q = `/api/meter/analytics?serial=${encodeURIComponent(sn)}&date_a=${encodeURIComponent(dateA)}&date_b=${encodeURIComponent(dateB)}`;
+  const d = await fetchFromAiServer(q);
+  if (!d || d.status !== 'ok') return;
+
+  meterAnalyticsData = d;
+
+  // Populate Date A & Date B dropdowns
+  if (selA && selB && Array.isArray(d.available_dates)) {
+    const curA = d.date_a || d.available_dates[0] || '';
+    const curB = d.date_b || d.available_dates[1] || d.available_dates[0] || '';
+    const optsHtml = d.available_dates.map((dt, idx) => {
+      const tag = idx === 0 ? ' (Hôm nay)' : (idx === 1 ? ' (Hôm qua)' : '');
+      return `<option value="${dt}">${formatDateVNShort(dt)}/${dt.slice(0,4)}${tag}</option>`;
+    }).join('');
+    if (selA.innerHTML !== optsHtml) selA.innerHTML = optsHtml;
+    if (selB.innerHTML !== optsHtml) selB.innerHTML = optsHtml;
+    selA.value = curA;
+    selB.value = curB;
+  }
+
+  renderMeterBarChart();
+}
+
+function renderMeterBarChart() {
+  const d = meterAnalyticsData;
+  const stage = document.getElementById('meter-bar-stage');
+  if (!d || !stage) return;
+
+  const kpi = d.kpi || {};
+  const dAStr = formatDateVNShort(d.date_a);
+  const dBStr = formatDateVNShort(d.date_b);
+
+  const lblA = document.getElementById('kpi-lbl-a');
+  if (lblA) lblA.textContent = `🟦 Ngày ${dAStr}`;
+  const valA = document.getElementById('kpi-val-a');
+  if (valA) valA.textContent = formatVol(kpi.date_a_liters || 0);
+  const subA = document.getElementById('kpi-sub-a');
+  if (subA) {
+    const pct = kpi.vs_date_b_pct || 0;
+    const sign = pct > 0 ? `+${pct}%` : `${pct}%`;
+    subA.textContent = `${(kpi.date_a_m3 || 0).toFixed(3)} m³ (${sign} vs ${dBStr})`;
+  }
+
+  const lblB = document.getElementById('kpi-lbl-b');
+  if (lblB) lblB.textContent = `🟪 Ngày ${dBStr}`;
+  const valB = document.getElementById('kpi-val-b');
+  if (valB) valB.textContent = formatVol(kpi.date_b_liters || 0);
+  const subB = document.getElementById('kpi-sub-b');
+  if (subB) subB.textContent = `${(kpi.date_b_m3 || 0).toFixed(3)} m³`;
+
+  const lblM = document.getElementById('kpi-lbl-month');
+  if (lblM) lblM.textContent = `📆 Tháng ${d.month || '--'}`;
+  const valM = document.getElementById('kpi-val-month');
+  if (valM) valM.textContent = formatVol(kpi.month_liters || 0);
+  const subM = document.getElementById('kpi-sub-month');
+  if (subM) subM.textContent = `${(kpi.month_m3 || 0).toFixed(3)} m³ lũy kế`;
+
+  const valP = document.getElementById('kpi-val-peak');
+  if (valP) valP.textContent = `${kpi.peak_hour_a || '--'} (${formatVol(kpi.peak_hour_a_liters || 0)})`;
+  const subP = document.getElementById('kpi-sub-peak');
+  if (subP) subP.textContent = `Giờ hiện tại (${kpi.current_hour || '--'}): ${formatVol(kpi.current_hour_liters || 0)}`;
+
+  if (meterChartMode === 'hourly' || meterChartMode === 'avg') {
+    const rows = d.hourly || [];
+    const valsA = rows.map(r => Number(r.liters_a) || 0);
+    const valsB = rows.map(r => Number(meterChartMode === 'avg' ? r.liters_avg : r.liters_b) || 0);
+    const maxVal = Math.max(10.0, ...valsA, ...valsB);
+    const peakA = Math.max(...valsA);
+    const curHrInt = parseInt((kpi.current_hour || '0').replace('h', '')) || 0;
+
+    stage.innerHTML = rows.map((r, i) => {
+      const vA = valsA[i];
+      const vB = valsB[i];
+      const hA = vA > 0 ? Math.max(4, Math.round((vA / maxVal) * 96)) : 2;
+      const hB = vB > 0 ? Math.max(4, Math.round((vB / maxVal) * 96)) : 2;
+      const isPeak = (vA > 0 && vA === peakA);
+      const isCur = (i === curHrInt);
+      const topTxt = vA >= vB ? formatVolShort(vA) : formatVolShort(vB);
+      return `<div class="bar-col ${isCur ? 'today-col' : ''} ${selectedChartColIdx === i ? 'selected' : ''}" onclick="selectChartCol(${i})">
+        <div class="bar-top-val">${topTxt}</div>
+        <div class="bar-pair">
+          <div class="bar-a ${isPeak ? 'peak' : ''}" style="height:${hA}px" title="${r.label} (${dAStr}): ${formatVol(vA)}"></div>
+          <div class="bar-b" style="height:${hB}px" title="${r.label} (${meterChartMode === 'avg' ? 'TB Tháng' : dBStr}): ${formatVol(vB)}"></div>
+        </div>
+        <div class="bar-x-lbl">${String(r.hour).padStart(2, '0')}h</div>
+      </div>`;
+    }).join('');
+
+    if (selectedChartColIdx >= 0 && selectedChartColIdx < rows.length) {
+      showChartColTooltip(selectedChartColIdx);
+    }
+  } else {
+    // Daily bars across the month (01..31)
+    const allDays = d.daily || [];
+    const vals = allDays.map(r => Number(r.liters) || 0);
+    const maxVal = Math.max(10.0, ...vals);
+    const peakVal = Math.max(...vals);
+
+    stage.innerHTML = allDays.map((r, i) => {
+      const v = vals[i];
+      const h = v > 0 ? Math.max(5, Math.round((v / maxVal) * 96)) : 2;
+      const isPeak = (v > 0 && v === peakVal);
+      const isToday = (r.date === d.date_a);
+      const topTxt = formatVolShort(v);
+      return `<div class="bar-col ${isToday ? 'today-col' : ''} ${selectedChartColIdx === i ? 'selected' : ''}" onclick="selectChartCol(${i})">
+        <div class="bar-top-val">${topTxt}</div>
+        <div class="bar-pair">
+          <div class="bar-a ${isPeak ? 'peak' : ''}" style="height:${h}px;max-width:14px" title="Ngày ${r.label}: ${formatVol(v)}"></div>
+        </div>
+        <div class="bar-x-lbl">${String(r.day).padStart(2, '0')}</div>
+      </div>`;
+    }).join('');
+
+    if (selectedChartColIdx >= 0 && selectedChartColIdx < allDays.length) {
+      showChartColTooltip(selectedChartColIdx);
+    }
+  }
+}
+
+function selectChartCol(idx) {
+  selectedChartColIdx = idx;
+  renderMeterBarChart();
+  showChartColTooltip(idx);
+}
+
+function showChartColTooltip(idx) {
+  const d = meterAnalyticsData;
+  const el = document.getElementById('chart-hover-detail');
+  if (!d || !el) return;
+  const dAStr = formatDateVNShort(d.date_a);
+  const dBStr = formatDateVNShort(d.date_b);
+
+  if (meterChartMode === 'hourly' || meterChartMode === 'avg') {
+    const r = (d.hourly || [])[idx];
+    if (!r) return;
+    const vA = Number(r.liters_a) || 0;
+    const vB = Number(meterChartMode === 'avg' ? r.liters_avg : r.liters_b) || 0;
+    const cmpName = meterChartMode === 'avg' ? 'TB Tháng' : `Ngày ${dBStr}`;
+    const diffStr = vB > 0.1 ? ` (${vA >= vB ? '+' : ''}${(((vA - vB) * 100) / vB).toFixed(0)}%)` : '';
+    const endAStr = r.end_a !== null && r.end_a !== undefined ? ` | Số đồng hồ: ${Number(r.end_a).toFixed(3)}` : '';
+    el.innerHTML = `📌 <b>Khung ${r.label} (${String(r.hour).padStart(2,'0')}:00–${String(r.hour).padStart(2,'0')}:59)</b> — <span style="color:#38bdf8">Ngày ${dAStr}: <b>${formatVol(vA)}</b>${endAStr}</span> vs <span style="color:#a78bfa">${cmpName}: <b>${formatVol(vB)}</b>${diffStr}</span>`;
+  } else {
+    const r = (d.daily || [])[idx];
+    if (!r) return;
+    const rangeStr = (r.start_val !== null && r.end_val !== null) ? ` | Chỉ số: ${r.start_val} ➔ ${r.end_val}` : '';
+    el.innerHTML = `📌 <b>Ngày ${r.label}/${d.month.slice(0,4)}</b> — Tổng tiêu thụ: <b style="color:#38bdf8">${formatVol(r.liters)}</b> (${r.m3} m³) | Giờ cao điểm: <b style="color:#fbbf24">${r.peak_hour} (${formatVol(r.peak_liters)})</b>${rangeStr}`;
+  }
+}
+
+function updateFlowSparkline(flowLpm, leakAlert) {
   const badge = document.getElementById('leak-status-badge');
   if (badge) {
     if (leakAlert && leakAlert !== 'NORMAL') {
@@ -430,6 +642,7 @@ function updateFlowSparkline(flowLpm, leakAlert) {
       badge.textContent = '✅ Đường ống kín (0.0 L/p)';
     }
   }
+  loadMeterAnalytics(false);
 }
 
 // ============================================================================
@@ -1143,6 +1356,7 @@ async function captureAll(mode) {
       showToast(`✅ Đã xử lý ${d.file} | FTP: ${d.ftp}`);
       if (streamMode === 'snap') refreshSnapshotOnce(false);
       updateStatus();
+      loadMeterAnalytics(true);
     } else {
       showToast('❌ Lỗi chụp ảnh');
     }
@@ -1900,6 +2114,7 @@ function copyZeroPromptBlock() {
   setTimeout(() => {
     applyStreamSource();
     loadConfig();
+    loadMeterAnalytics(true);
   }, 60);
   setInterval(updateStatus, 2500);
 })();

@@ -47,6 +47,7 @@ ANNOTATED_DIR = BASE_DIR / "annotated"
 FIRMWARE_DIR = BASE_DIR / "firmware"
 HISTORY_FILE = BASE_DIR / "history.json"
 METER_STATE_FILE = BASE_DIR / "meter_state.json"
+METER_LEDGER_FILE = BASE_DIR / "meter_ledger.json"
 MULTI_SCREEN_FILE = BASE_DIR / "multi_screen_state.json"
 TELEMETRY_FILE = BASE_DIR / "latest_telemetry.json"
 
@@ -1055,11 +1056,12 @@ class MeterStateTracker:
                 b_val = self._parse_float(baseline_str)
                 cur_last = st.get("last_value")
                 if b_val is not None and st.get("baseline_seed") != baseline_str.strip():
-                    if cur_last is None or b_val >= float(cur_last):
+                    # Ignore echo when ESP32 sends back the current reading as baseline
+                    if cur_last is None or (b_val > float(cur_last) + 0.005):
                         st = {
                             "last_value": round(b_val, 4),
-                            "last_epoch": now_ts,
-                            "flow_lpm": 0.0,
+                            "last_epoch": st.get("last_epoch", now_ts - 60.0),
+                            "flow_lpm": float(st.get("flow_lpm", 0.0)),
                             "baseline_seed": baseline_str.strip(),
                             "updated_at": now_vn_str()
                         }
@@ -1073,7 +1075,7 @@ class MeterStateTracker:
             prev_ts = st.get("last_epoch", now_ts - 60.0)
             prev_flow = float(st.get("flow_lpm", 0.0))
             prev_pending = st.get("pending_cand", None)
-            dt_sec = max(1.0, now_ts - float(prev_ts))
+            dt_sec = max(5.0, now_ts - float(prev_ts))
             new_valid_epoch = prev_ts
             new_pending = None
 
@@ -1082,7 +1084,7 @@ class MeterStateTracker:
             # On 3-pointer GB/T 778-2018 meters (4 black + 1 red roller + 3 red pointers x0.01, x0.001, x0.0001),
             # 1 unit of the 5-roller integer is 0.1 m3 = 100 Liters, and .001 pointer is 0.1 Liter.
             liters_per_unit = 100.0 if (dial_digits != "----" and len(dial_digits) == 3) else 1000.0
-            max_delta_m3 = max(0.85, (max(5.0, float(max_flow_lpm)) / 60.0) * dt_sec / liters_per_unit)
+            max_delta_m3 = max(0.18, (max(5.0, float(max_flow_lpm)) / 60.0) * dt_sec / liters_per_unit)
             ocr_val = self._parse_float(lcd_val_str)
             if ocr_val is None:
                 ocr_val = self._parse_float(seg7_val_str)
@@ -1192,7 +1194,7 @@ class MeterStateTracker:
                 flow_streak = 0
 
             leak_alert = "NORMAL"
-            if flow_lpm >= 25.0:
+            if flow_lpm >= max(15.0, float(max_flow_lpm) * 0.85):
                 leak_alert = "QUÁ LƯU LƯỢNG / VỠ ỐNG"
             elif flow_streak >= 6:
                 leak_alert = "NGHI RÒ RỈ NGẦM (Chảy liên tục)"
@@ -1204,7 +1206,7 @@ class MeterStateTracker:
                 "flow_lpm": flow_lpm,
                 "flow_streak": flow_streak,
                 "leak_alert": leak_alert,
-                "baseline_seed": st.get("baseline_seed", ""),
+                "baseline_seed": str(final_val),
                 "filter_state": f_state,
                 "updated_at": now_vn_str()
             }
@@ -1222,6 +1224,273 @@ class MeterStateTracker:
 
 
 meter_tracker = MeterStateTracker(METER_STATE_FILE)
+
+
+# ============================================================================
+# HOURLY / DAILY / MONTHLY CONSUMPTION ANALYTICS LEDGER
+# ============================================================================
+class MeterAnalyticsLedger:
+    """
+    Stores validated meter readings across hours, days, and months.
+    Computes:
+    - 24-hour consumption bar series for any day (with Day-A vs Day-B comparison & Monthly Hourly Average)
+    - Daily consumption bar series across all days in a month (01..31)
+    - Summary KPIs (Today, Yesterday, Month Total, Peak Hour, Nighttime Leak Check)
+    """
+
+    def __init__(self, ledger_file: Path):
+        self.ledger_file = ledger_file
+        self.lock = threading.Lock()
+        self.points: List[Dict[str, Any]] = []
+        self._load()
+
+    def _load(self):
+        if self.ledger_file.exists():
+            try:
+                data = json.loads(self.ledger_file.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    self.points = data
+            except Exception:
+                self.points = []
+
+    def _save(self):
+        try:
+            self.ledger_file.write_text(json.dumps(self.points[-8000:], ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _extract_ts_from_file_or_str(filename: str, ts_str: str) -> str:
+        # Prefer cam_YYYYMMDD_HHMMSS.jpg timestamp if present
+        base = os.path.basename(filename or "")
+        if base.startswith("cam_20") and len(base) >= 19:
+            dpart = base[4:12]
+            tpart = base[13:19]
+            if dpart.isdigit() and tpart.isdigit():
+                return f"{dpart[0:4]}-{dpart[4:6]}-{dpart[6:8]} {tpart[0:2]}:{tpart[2:4]}:{tpart[4:6]}"
+        if ts_str and len(ts_str) >= 19:
+            return ts_str[:19]
+        return now_vn_str()
+
+    def record_point(self, serial: str, val_str: str, filename: str = "", ts_str: str = "", save_now: bool = True):
+        val = MeterStateTracker._parse_float(val_str)
+        if val is None or val <= 0.0:
+            return
+        clean_ts = self._extract_ts_from_file_or_str(filename, ts_str)
+        date_str = clean_ts[:10]
+        try:
+            hour_int = int(clean_ts[11:13])
+        except Exception:
+            hour_int = 0
+        sn = (serial or "00000198").strip()
+        with self.lock:
+            # Deduplicate if exact timestamp already recorded
+            for p in reversed(self.points[-40:]):
+                if p.get("ts") == clean_ts and p.get("serial") == sn:
+                    p["val"] = round(val, 4)
+                    if save_now:
+                        self._save()
+                    return
+            self.points.append({
+                "ts": clean_ts,
+                "date": date_str,
+                "month": date_str[:7],
+                "hour": hour_int,
+                "serial": sn,
+                "val": round(val, 4)
+            })
+            self.points.sort(key=lambda x: x["ts"])
+            if len(self.points) > 8000:
+                self.points = self.points[-8000:]
+            if save_now:
+                self._save()
+
+    def ingest_history_list(self, hist: List[Dict[str, Any]]):
+        added = 0
+        for h in reversed(hist):
+            m = h.get("meter") or {}
+            dv = m.get("dial_value") or m.get("lcd_value") or m.get("seg7_value")
+            if dv and dv != "----":
+                self.record_point(
+                    serial=m.get("meter_serial", "00000198"),
+                    val_str=str(dv),
+                    filename=str(h.get("file", "")),
+                    ts_str=str(h.get("timestamp", "")),
+                    save_now=False
+                )
+                added += 1
+        if added > 0:
+            self._save()
+
+    def compute_analytics(
+        self,
+        serial: str = "00000198",
+        month: str = "",
+        date_a: str = "",
+        date_b: str = "",
+        liters_per_unit: float = 100.0
+    ) -> Dict[str, Any]:
+        now_dt = datetime.now(TZ_VN)
+        today_str = now_dt.strftime("%Y-%m-%d")
+        yesterday_str = (now_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        with self.lock:
+            pts = [p for p in self.points if not serial or p.get("serial", "00000198") == serial]
+            if not pts:
+                pts = list(self.points)
+
+        pts.sort(key=lambda x: x["ts"])
+
+        avail_dates = sorted(list(set([p["date"] for p in pts] + [today_str, yesterday_str])), reverse=True)
+        avail_months = sorted(list(set([d[:7] for d in avail_dates])), reverse=True)
+
+        sel_date_a = date_a if (date_a and len(date_a) == 10) else today_str
+        sel_date_b = date_b if (date_b and len(date_b) == 10) else yesterday_str
+        sel_month = month if (month and len(month) == 7) else sel_date_a[:7]
+
+        # Group readings by (date, hour)
+        by_date_hour: Dict[Tuple[str, int], List[float]] = {}
+        by_date: Dict[str, List[Tuple[int, float]]] = {}
+        for p in pts:
+            d = p["date"]
+            hr = int(p["hour"])
+            v = float(p["val"])
+            by_date_hour.setdefault((d, hr), []).append(v)
+            by_date.setdefault(d, []).append((hr, v))
+
+        def build_24h_for_date(target_date: str) -> Tuple[List[float], List[Optional[float]]]:
+            hourly_liters = [0.0] * 24
+            hourly_end_val: List[Optional[float]] = [None] * 24
+
+            # Find last reading prior to target_date (e.g. 23h of previous day) if close
+            prev_day_str = (datetime.strptime(target_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            prev_day_pts = by_date.get(prev_day_str, [])
+            carry_val: Optional[float] = prev_day_pts[-1][1] if (prev_day_pts and prev_day_pts[-1][0] >= 21) else None
+            last_seen_hr: int = -1 if carry_val is not None else -99
+
+            for hr in range(24):
+                vals = by_date_hour.get((target_date, hr), [])
+                if not vals:
+                    continue
+                v_start = vals[0]
+                v_end = vals[-1]
+                hourly_end_val[hr] = round(v_end, 3)
+
+                if carry_val is not None and (hr - last_seen_hr) <= 3 and v_end >= carry_val:
+                    delta_u = max(0.0, v_end - carry_val)
+                    # Distribute across gap hours if gap > 1
+                    gap = max(1, hr - max(0, last_seen_hr))
+                    if last_seen_hr >= 0 and gap > 1:
+                        per_hr = round((delta_u * liters_per_unit) / gap, 1)
+                        for g_hr in range(last_seen_hr + 1, hr + 1):
+                            hourly_liters[g_hr] = per_hr
+                    else:
+                        hourly_liters[hr] = round(delta_u * liters_per_unit, 1)
+                else:
+                    delta_u = max(0.0, v_end - v_start)
+                    hourly_liters[hr] = round(delta_u * liters_per_unit, 1)
+
+                carry_val = v_end
+                last_seen_hr = hr
+
+            return hourly_liters, hourly_end_val
+
+        # Compute 24h series for all dates in selected month so we also get monthly hourly averages & daily totals
+        month_dates = sorted(list(set([d for d in avail_dates if d.startswith(sel_month)])))
+        all_date_24h: Dict[str, Tuple[List[float], List[Optional[float]]]] = {}
+        for d in set(month_dates + [sel_date_a, sel_date_b]):
+            all_date_24h[d] = build_24h_for_date(d)
+
+        hourly_a, end_a = all_date_24h[sel_date_a]
+        hourly_b, end_b = all_date_24h[sel_date_b]
+
+        # Monthly average per hour (00h..23h) across active days
+        hourly_month_avg = [0.0] * 24
+        for hr in range(24):
+            active_vals = [all_date_24h[d][0][hr] for d in month_dates if any(x > 0 for x in all_date_24h[d][0])]
+            if active_vals:
+                hourly_month_avg[hr] = round(float(sum(active_vals)) / len(active_vals), 1)
+
+        hourly_rows = []
+        for hr in range(24):
+            hourly_rows.append({
+                "hour": hr,
+                "label": f"{hr:02d}h",
+                "liters_a": hourly_a[hr],
+                "liters_b": hourly_b[hr],
+                "liters_avg": hourly_month_avg[hr],
+                "end_a": end_a[hr],
+                "end_b": end_b[hr],
+            })
+
+        # Build daily bars for the selected month (days 1..31)
+        year_int, month_int = int(sel_month[:4]), int(sel_month[5:7])
+        if month_int == 12:
+            days_in_month = 31
+        else:
+            days_in_month = (datetime(year_int, month_int + 1, 1) - timedelta(days=1)).day
+
+        daily_rows = []
+        month_total_liters = 0.0
+        for day_num in range(1, days_in_month + 1):
+            d_str = f"{sel_month}-{day_num:02d}"
+            h_bars, h_ends = all_date_24h.get(d_str, ([0.0] * 24, [None] * 24))
+            day_liters = round(sum(h_bars), 1)
+            d_pts = by_date.get(d_str, [])
+            if day_liters == 0.0 and len(d_pts) >= 2:
+                day_liters = round(max(0.0, d_pts[-1][1] - d_pts[0][1]) * liters_per_unit, 1)
+            month_total_liters += day_liters
+            peak_hr = int(np.argmax(h_bars)) if any(x > 0 for x in h_bars) else None
+            daily_rows.append({
+                "day": day_num,
+                "date": d_str,
+                "label": f"{day_num:02d}/{month_int:02d}",
+                "liters": day_liters,
+                "m3": round(day_liters / 1000.0, 3),
+                "start_val": round(d_pts[0][1], 3) if d_pts else None,
+                "end_val": round(d_pts[-1][1], 3) if d_pts else None,
+                "peak_hour": f"{peak_hr:02d}h" if peak_hr is not None else "--",
+                "peak_liters": round(max(h_bars), 1) if peak_hr is not None else 0.0,
+            })
+
+        tot_a = round(sum(hourly_a), 1)
+        tot_b = round(sum(hourly_b), 1)
+        peak_hr_a = int(np.argmax(hourly_a)) if any(x > 0 for x in hourly_a) else now_dt.hour
+        cur_hr = now_dt.hour
+        # Compare cumulative up to current hour if date_a is today
+        upto_hr = cur_hr if sel_date_a == today_str else 23
+        sum_a_upto = sum(hourly_a[:upto_hr + 1])
+        sum_b_upto = sum(hourly_b[:upto_hr + 1])
+        diff_pct = round(((sum_a_upto - sum_b_upto) * 100.0 / sum_b_upto), 1) if sum_b_upto > 0.1 else 0.0
+
+        return {
+            "status": "ok",
+            "serial": serial or "00000198",
+            "liters_per_unit": liters_per_unit,
+            "month": sel_month,
+            "date_a": sel_date_a,
+            "date_b": sel_date_b,
+            "available_dates": avail_dates,
+            "available_months": avail_months,
+            "kpi": {
+                "date_a_liters": tot_a,
+                "date_a_m3": round(tot_a / 1000.0, 3),
+                "date_b_liters": tot_b,
+                "date_b_m3": round(tot_b / 1000.0, 3),
+                "month_liters": round(month_total_liters, 1),
+                "month_m3": round(month_total_liters / 1000.0, 3),
+                "current_hour": f"{cur_hr:02d}h",
+                "current_hour_liters": hourly_a[cur_hr],
+                "peak_hour_a": f"{peak_hr_a:02d}h",
+                "peak_hour_a_liters": hourly_a[peak_hr_a],
+                "vs_date_b_pct": diff_pct,
+            },
+            "hourly": hourly_rows,
+            "daily": daily_rows,
+        }
+
+
+meter_ledger = MeterAnalyticsLedger(METER_LEDGER_FILE)
 
 
 # ============================================================================
@@ -1559,7 +1828,8 @@ latest_telemetry: Dict[str, Any] = {}
 
 if HISTORY_FILE.exists():
     try:
-        history_list = json.loads(HISTORY_FILE.read_text())[:100]
+        history_list = json.loads(HISTORY_FILE.read_text())[:1000]
+        meter_ledger.ingest_history_list(history_list)
     except Exception:
         history_list = []
 
@@ -1571,7 +1841,7 @@ if TELEMETRY_FILE.exists():
 
 def save_history():
     try:
-        HISTORY_FILE.write_text(json.dumps(history_list[:100], ensure_ascii=False, indent=2))
+        HISTORY_FILE.write_text(json.dumps(history_list[:1000], ensure_ascii=False, indent=2))
     except Exception:
         pass
 
@@ -1761,13 +2031,16 @@ def process_and_record_image(
     res.pop("_meter_boxes", None)
 
     history_list.insert(0, res)
-    if len(history_list) > 100:
+    if len(history_list) > 1000:
         history_list.pop()
     save_history()
 
     try:
         m_obj = res.get("meter", {})
         sn = m_obj.get("meter_serial") or meter_serial or "00000198"
+        dv = m_obj.get("dial_value") or m_obj.get("lcd_value") or m_obj.get("seg7_value")
+        if dv and dv != "----":
+            meter_ledger.record_point(sn, str(dv), filename, res.get("timestamp", ""))
         mqtt_client.publish("esp32cam/ai_result", json.dumps(res, ensure_ascii=False))
         mqtt_client.publish("esp32cam/meter_reading", json.dumps(m_obj, ensure_ascii=False))
         mqtt_client.publish(f"esp32cam/meter/{sn}/reading", json.dumps(m_obj, ensure_ascii=False), retain=True)
@@ -1876,6 +2149,16 @@ async def api_meter_calibrate(device: str = "esp32-cam", serial: str = "00000198
 @app.get("/api/meter/state")
 async def api_meter_state():
     return JSONResponse({"status": "ok", "states": meter_tracker.states})
+
+@app.get("/api/meter/analytics")
+async def api_meter_analytics(
+    serial: str = "00000198",
+    month: str = "",
+    date_a: str = "",
+    date_b: str = ""
+):
+    data = meter_ledger.compute_analytics(serial=serial, month=month, date_a=date_a, date_b=date_b)
+    return JSONResponse(data)
 
 @app.get("/api/meter/screens")
 async def api_meter_screens(device: str = "esp32-cam"):
