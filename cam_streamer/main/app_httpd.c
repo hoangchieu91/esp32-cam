@@ -183,23 +183,28 @@ static esp_err_t execute_capture_pipeline(const char *mode, char *out_filename, 
     bool ai_only = (mode && (strcmp(mode, "ai_only") == 0 || strcmp(mode, "debug_board") == 0));
 
     // 1. Save to SD Card (with Industrial Auto-Remount on failure)
-    if (!ai_only && g_cfg.sd_save_enable && s_sd_mounted) {
-        char sd_path[96];
-        snprintf(sd_path, sizeof(sd_path), "/sdcard/%s", base_name);
-        FILE *f = fopen(sd_path, "wb");
-        if (!f) {
-            ESP_LOGW(TAG, "SD write failed, triggering Industrial SD Auto-Remount...");
+    if (!ai_only && g_cfg.sd_save_enable) {
+        if (!s_sd_mounted) {
             app_remount_sd_card();
-            f = fopen(sd_path, "wb");
         }
-        if (f) {
-            fwrite(work_buf, 1, work_len, f);
-            fclose(f);
-            s_sd_write_ok_cnt++;
-            ESP_LOGI(TAG, "Saved to SD Card: %s (%u bytes)", sd_path, (unsigned)work_len);
-        } else {
-            s_sd_write_err_cnt++;
-            ESP_LOGE(TAG, "Failed to write SD file after remount: %s", sd_path);
+        if (s_sd_mounted) {
+            char sd_path[96];
+            snprintf(sd_path, sizeof(sd_path), "/sdcard/%s", base_name);
+            FILE *f = fopen(sd_path, "wb");
+            if (!f) {
+                ESP_LOGW(TAG, "SD write failed, triggering Industrial SD Auto-Remount...");
+                app_remount_sd_card();
+                f = fopen(sd_path, "wb");
+            }
+            if (f) {
+                fwrite(work_buf, 1, work_len, f);
+                fclose(f);
+                s_sd_write_ok_cnt++;
+                ESP_LOGI(TAG, "Saved to SD Card: %s (%u bytes)", sd_path, (unsigned)work_len);
+            } else {
+                s_sd_write_err_cnt++;
+                ESP_LOGE(TAG, "Failed to write SD file after remount: %s", sd_path);
+            }
         }
     }
 
@@ -833,6 +838,9 @@ static esp_err_t snapshot_handler(httpd_req_t *req) {
 
 static esp_err_t list_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
+    if (!s_sd_mounted) {
+        return httpd_resp_send(req, "[]", 2);
+    }
     httpd_resp_send_chunk(req, "[", 1);
     DIR *dir = opendir("/sdcard");
     bool first = true;
@@ -1086,6 +1094,8 @@ static esp_err_t cmd_handler(httpd_req_t *req) {
                 app_config_factory_reset_preserve_vpn();
             } else if (!strcmp(var, "sd_format")) {
                 app_format_sd_card();
+            } else if (!strcmp(var, "sd_remount")) {
+                app_remount_sd_card();
             } else if (!strcmp(var, "sd_prune")) {
                 app_prune_oldest_sd_files(v > 0 ? v : 5);
             } else if (!strcmp(var, "sd_auto_prune")) {

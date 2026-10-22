@@ -79,6 +79,7 @@ function applyStreamSource() {
 
 function setStreamMode(mode) {
   streamMode = mode;
+  try { localStorage.setItem('esp32cam_stream_mode', mode); } catch(e) {}
   ['mjpeg', 'snap', 'pause'].forEach(m => {
     const b = document.getElementById('mode-btn-' + m);
     if (b) b.classList.toggle('active', m === mode);
@@ -132,14 +133,22 @@ document.addEventListener('visibilitychange', () => {
 // NAVIGATION TABS & SUB-TABS
 // ============================================================================
 function switchTab(id, btn) {
+  if (!document.getElementById('tab-' + id)) id = 'live';
   currentTab = id;
+  try {
+    localStorage.setItem('esp32cam_tab', id);
+    if (window.location.hash !== '#tab-' + id) {
+      history.replaceState(null, '', '#tab-' + id);
+    }
+  } catch(e) {}
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
   document.getElementById('tab-' + id).classList.add('active');
-  if (btn) {
-    btn.classList.add('active');
-    if (btn.scrollIntoView) {
-      btn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  const targetBtn = btn || document.querySelector(`.tab-btn[onclick*="switchTab('${id}'"]`);
+  if (targetBtn) {
+    targetBtn.classList.add('active');
+    if (targetBtn.scrollIntoView) {
+      targetBtn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
     }
   }
   applyStreamSource();
@@ -153,10 +162,13 @@ function switchTab(id, btn) {
 }
 
 function switchSubTab(id, btn) {
+  if (!document.getElementById('sub-' + id)) return;
+  try { localStorage.setItem('esp32cam_subtab', id); } catch(e) {}
   document.querySelectorAll('.subtab-pane').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.subtab-btn').forEach(el => el.classList.remove('active'));
   document.getElementById('sub-' + id).classList.add('active');
-  if (btn) btn.classList.add('active');
+  const targetBtn = btn || document.querySelector(`.subtab-btn[onclick*="switchSubTab('${id}'"]`);
+  if (targetBtn) targetBtn.classList.add('active');
 }
 
 // ============================================================================
@@ -660,7 +672,7 @@ async function updateStatus() {
     mb.className = 'badge ' + (d.mqtt ? 'ok' : 'warn');
 
     const sb = document.getElementById('sd-badge');
-    sb.textContent = d.sd_mounted ? `💾 SD: ${(d.sd_free_mb/1024).toFixed(1)}GB` : 'SD: Lỗi';
+    sb.textContent = d.sd_mounted ? `💾 SD: ${(d.sd_free_mb/1024).toFixed(1)}GB` : '☁️ SD Lỏng (Lưu .171)';
     sb.className = 'badge ' + (d.sd_mounted ? 'ok' : 'warn');
 
     // Live Stream HUD & Edge LED Indicator + Flash & Countdown
@@ -798,18 +810,38 @@ async function updateStatus() {
     document.getElementById('h-psram-min').textContent =
       `Đã dùng: ${psPct.toFixed(1)}% | Min Free lịch sử: ${((d.psram_min_free||0)/1048576).toFixed(2)} MB`;
 
-    const sdHwTot = d.sd_total_mb || 15193;
-    const sdFatTot = d.sd_fat_total_mb || sdHwTot;
-    const sdFree = d.sd_free_mb || 15190;
-    const sdUsed = Math.max(0, sdFatTot - sdFree);
-    const sdPct = sdFatTot > 0 ? Math.min(100, (sdUsed * 100) / sdFatTot) : 0;
-    document.getElementById('h-sd-txt').textContent = `${(sdFree/1024).toFixed(2)} GB trống / ${(sdFatTot/1024).toFixed(2)} GB`;
-    document.getElementById('h-sd-bar').style.width = `${Math.max(2, sdPct).toFixed(1)}%`;
-    document.getElementById('h-sd-sub').textContent = `Vật lý: ${(sdHwTot/1024).toFixed(2)}GB | FAT: ${(sdFatTot/1024).toFixed(2)}GB | Đã dùng: ${sdUsed}MB (${sdPct.toFixed(1)}%)`;
+    if (d.sd_mounted) {
+      const sdHwTot = d.sd_total_mb || 15193;
+      const sdFatTot = d.sd_fat_total_mb || sdHwTot;
+      const sdFree = d.sd_free_mb || 0;
+      const sdUsed = Math.max(0, sdFatTot - sdFree);
+      const sdPct = sdFatTot > 0 ? Math.min(100, (sdUsed * 100) / sdFatTot) : 0;
+      document.getElementById('h-sd-txt').textContent = `${(sdFree/1024).toFixed(2)} GB trống / ${(sdFatTot/1024).toFixed(2)} GB`;
+      document.getElementById('h-sd-bar').style.width = `${Math.max(2, sdPct).toFixed(1)}%`;
+      document.getElementById('h-sd-sub').textContent = `Vật lý: ${(sdHwTot/1024).toFixed(2)}GB | FAT: ${(sdFatTot/1024).toFixed(2)}GB | Đã dùng: ${sdUsed}MB (${sdPct.toFixed(1)}%)`;
 
-    // Sync SD Card bar in Tab 4
-    document.getElementById('sd-cap-summary').textContent = `${(sdFree/1024).toFixed(2)} GB trống / ${(sdFatTot/1024).toFixed(2)} GB (Đã dùng ${sdPct.toFixed(1)}%)`;
-    document.getElementById('sd-cap-bar').style.width = `${Math.max(2, sdPct).toFixed(1)}%`;
+      const sdLbl = document.getElementById('sd-cap-lbl');
+      if (sdLbl) sdLbl.textContent = `Dung lượng Thẻ nhớ MicroSD (${d.sd_name || 'SU16G'})`;
+      const sdSum = document.getElementById('sd-cap-summary');
+      if (sdSum) {
+        sdSum.style.color = '#34d399';
+        sdSum.textContent = `${(sdFree/1024).toFixed(2)} GB trống / ${(sdFatTot/1024).toFixed(2)} GB (Đã dùng ${sdPct.toFixed(1)}%)`;
+      }
+      document.getElementById('sd-cap-bar').style.width = `${Math.max(2, sdPct).toFixed(1)}%`;
+    } else {
+      document.getElementById('h-sd-txt').textContent = `Chưa tiếp xúc (${d.sd_name || '0x107'})`;
+      document.getElementById('h-sd-bar').style.width = '100%';
+      document.getElementById('h-sd-sub').textContent = 'Đang tự động đồng bộ ảnh qua FTP & HTTP sang Kho Lưu Trữ Server 10.25.7.171';
+
+      const sdLbl = document.getElementById('sd-cap-lbl');
+      if (sdLbl) sdLbl.textContent = `⚠️ Khe thẻ MicroSD chưa tiếp xúc (${d.sd_name || '0x107'}) — Đang đồng bộ & hiển thị từ Server .171`;
+      const sdSum = document.getElementById('sd-cap-summary');
+      if (sdSum) {
+        sdSum.style.color = '#fbbf24';
+        sdSum.textContent = '☁️ Đang dùng Kho Ảnh Server .171 (Ấn lại thẻ SD rồi bấm "🔌 Nhận Lại Thẻ SD")';
+      }
+      document.getElementById('sd-cap-bar').style.width = '100%';
+    }
 
     // Network & WireGuard Table (Tab 3)
     document.getElementById('h-ping-badge').textContent = `Ping RTT: ${rtt} ms`;
@@ -1154,25 +1186,32 @@ async function connectWifiSlot(slot) {
 // ============================================================================
 function setSdFilter(mode) {
   sdFilterMode = mode;
-  ['all', 'file', 'dir'].forEach(m => {
+  ['all', 'file', 'cloud', 'dir'].forEach(m => {
     const b = document.getElementById('sd-flt-' + m);
     if (b) b.classList.toggle('active', m === mode);
   });
   renderSdGallery();
 }
 
-function openImgModal(name, sizeKb) {
+function openImgModal(name, sizeKb, customUrl, metaSummary) {
   const m = document.getElementById('img-modal');
-  document.getElementById('modal-title').textContent = '🖼️ ' + name;
-  document.getElementById('modal-img').src = '/sdcard/' + encodeURIComponent(name);
-  document.getElementById('modal-meta').textContent = `Dung lượng: ${sizeKb} KB | Đường dẫn: /sdcard/${name}`;
+  const url = customUrl || ('/sdcard/' + encodeURIComponent(name));
+  document.getElementById('modal-title').textContent = (customUrl ? '☁️ ' : '🖼️ ') + name;
+  document.getElementById('modal-img').src = url;
+  document.getElementById('modal-meta').textContent = metaSummary
+    ? `${metaSummary} | Nguồn: Kho Lưu Trữ Server .171`
+    : `Dung lượng: ${sizeKb} KB | Đường dẫn: /sdcard/${name}`;
   const dl = document.getElementById('modal-dl');
-  dl.href = '/sdcard/' + encodeURIComponent(name);
+  dl.href = url;
   dl.download = name;
-  document.getElementById('modal-del').onclick = function() {
-    closeImgModal();
-    delSdFile(name);
-  };
+  const delBtn = document.getElementById('modal-del');
+  if (delBtn) {
+    delBtn.style.display = customUrl ? 'none' : 'inline-flex';
+    delBtn.onclick = function() {
+      closeImgModal();
+      delSdFile(name);
+    };
+  }
   m.style.display = 'flex';
 }
 
@@ -1200,12 +1239,27 @@ function renderSdGallery() {
           <span class="badge warn">Thư mục</span>
         </div>`;
     }
+    if (f.type === 'cloud') {
+      const safeSum = (f.summary || '').replace(/'/g, '');
+      return `
+        <div class="file-row" style="background:rgba(14,165,233,0.07);border-color:rgba(56,189,248,0.25)">
+          <div class="file-info" onclick="openImgModal('${f.name}', '--', '${f.annUrl}', '${safeSum} (${f.timestamp || ''})')">
+            <span class="file-name" style="color:#38bdf8">☁️ ${f.name}</span>
+            <span class="file-meta">${f.timestamp || ''} • <b style="color:#34d399">${f.summary || 'Đã đồng bộ Server .171'}</b></span>
+          </div>
+          <div style="display:flex;gap:5px;flex-shrink:0">
+            <button class="btn btn-sm" title="Xem ảnh AI chấm điểm" onclick="openImgModal('${f.name}', '--', '${f.annUrl}', '${safeSum} (${f.timestamp || ''})')">🎯 AI</button>
+            <button class="btn btn-sm" title="Xem ảnh gốc" onclick="openImgModal('${f.name}', '--', '${f.rawUrl}', '${safeSum} (${f.timestamp || ''})')">👁️ Gốc</button>
+            <a class="btn btn-sm" href="${f.rawUrl}" target="_blank" download="${f.name}">⬇️</a>
+          </div>
+        </div>`;
+    }
     const kb = (f.size / 1024).toFixed(1);
     return `
       <div class="file-row">
         <div class="file-info" onclick="openImgModal('${f.name}', '${kb}')">
           <span class="file-name">🖼️ ${f.name}</span>
-          <span class="file-meta">${kb} KB • Bấm để xem ảnh</span>
+          <span class="file-meta">${kb} KB • Lưu trên Thẻ SD cục bộ</span>
         </div>
         <div style="display:flex;gap:5px;flex-shrink:0">
           <button class="btn btn-sm" onclick="openImgModal('${f.name}', '${kb}')">👁️</button>
@@ -1218,6 +1272,7 @@ function renderSdGallery() {
 
 async function loadSdFiles() {
   const box = document.getElementById('sd-file-list');
+  let combined = [];
   try {
     const r = await fetch('/list');
     const files = await r.json();
@@ -1225,9 +1280,46 @@ async function loadSdFiles() {
       if (a.type !== b.type) return a.type === 'file' ? -1 : 1;
       return b.name.localeCompare(a.name);
     });
-    sdCacheFiles = files;
-    renderSdGallery();
-  } catch (e) { box.innerHTML = 'Lỗi đọc thẻ nhớ'; }
+    combined = files;
+  } catch (e) {}
+
+  try {
+    const cr = await fetch('http://10.25.7.171:8095/api/history');
+    const cd = await cr.json();
+    if (cd && Array.isArray(cd.history)) {
+      const seenCloud = new Set();
+      cd.history.forEach(h => {
+        if (h.file && !seenCloud.has(h.file)) {
+          seenCloud.add(h.file);
+          combined.push({
+            name: h.file,
+            size: 0,
+            type: 'cloud',
+            timestamp: h.timestamp || '',
+            summary: h.summary || '',
+            annUrl: 'http://10.25.7.171:8095/annotated/' + encodeURIComponent(h.file),
+            rawUrl: 'http://10.25.7.171:8095/raw/' + encodeURIComponent(h.file)
+          });
+        }
+      });
+    }
+  } catch (e) {}
+
+  sdCacheFiles = combined;
+  renderSdGallery();
+}
+
+async function remountSdCard() {
+  showToast('🔌 Đang khởi tạo lại khe thẻ nhớ MicroSD (SDMMC 1-bit & SDSPI)...');
+  await fetch('/control?var=sd_remount&val=1');
+  await updateStatus();
+  await loadSdFiles();
+  const sb = document.getElementById('sd-badge');
+  if (sb && sb.classList.contains('ok')) {
+    showToast('✅ Đã nhận thẻ nhớ MicroSD thành công!');
+  } else {
+    showToast('⚠️ Khe thẻ MicroSD chưa tiếp xúc vật lý — Đang hiển thị Kho Ảnh Server .171');
+  }
 }
 
 async function pruneSdFiles() {
@@ -1558,13 +1650,27 @@ function copyZeroPromptBlock() {
 // Initialize App: Fetch /status FIRST with zero contention so UI badges & clock populate in <80ms,
 // then start video stream & config load after initial paint so iOS Safari completes page load immediately.
 (async function initApp() {
-  if (window.location.hostname === '10.212.156.7') {
-    streamMode = 'snap';
+  try {
+    const savedMode = localStorage.getItem('esp32cam_stream_mode');
+    if (savedMode && ['mjpeg', 'snap', 'pause'].includes(savedMode)) {
+      streamMode = savedMode;
+    } else if (window.location.hostname === '10.212.156.7') {
+      streamMode = 'snap';
+    }
     ['mjpeg', 'snap', 'pause'].forEach(m => {
       const b = document.getElementById('mode-btn-' + m);
-      if (b) b.classList.toggle('active', m === 'snap');
+      if (b) b.classList.toggle('active', m === streamMode);
     });
-  }
+    const savedSub = localStorage.getItem('esp32cam_subtab');
+    if (savedSub && document.getElementById('sub-' + savedSub)) {
+      switchSubTab(savedSub);
+    }
+    const hashTab = window.location.hash.startsWith('#tab-') ? window.location.hash.replace('#tab-', '') : '';
+    const savedTab = hashTab || localStorage.getItem('esp32cam_tab') || 'live';
+    if (savedTab && document.getElementById('tab-' + savedTab)) {
+      switchTab(savedTab);
+    }
+  } catch(e) {}
   await updateStatus();
   setTimeout(() => {
     applyStreamSource();

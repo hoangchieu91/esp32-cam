@@ -36,7 +36,7 @@ def sync_modular_sources() -> str:
             body = open(SRC_BODY, "r", encoding="utf-8").read()
             js = open(SRC_JS, "r", encoding="utf-8").read()
             assembled = f"{HTML_HEADER}{css}</style>\n</head>\n<body>\n{body}<script>\n{js}</script>\n</body>\n</html>\n"
-            with open(SRC_HTML, "w", encoding="utf-8") as f:
+            with open(SRC_HTML, "w", encoding="utf-8", newline="\n") as f:
                 f.write(assembled)
             return assembled
         else:
@@ -49,9 +49,9 @@ def sync_modular_sources() -> str:
                 b_end = raw.index("<script>")
                 j_start = raw.index("<script>") + len("<script>\n")
                 j_end = raw.index("</script>")
-                open(SRC_CSS, "w", encoding="utf-8").write(raw[s_start:s_end])
-                open(SRC_BODY, "w", encoding="utf-8").write(raw[b_start:b_end])
-                open(SRC_JS, "w", encoding="utf-8").write(raw[j_start:j_end])
+                open(SRC_CSS, "w", encoding="utf-8", newline="\n").write(raw[s_start:s_end])
+                open(SRC_BODY, "w", encoding="utf-8", newline="\n").write(raw[b_start:b_end])
+                open(SRC_JS, "w", encoding="utf-8", newline="\n").write(raw[j_start:j_end])
             except ValueError:
                 pass
             return raw

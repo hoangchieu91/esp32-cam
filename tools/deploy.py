@@ -50,7 +50,8 @@ def step_local_build() -> None:
     ps_cmd = (
         f". '{IDF_EXPORT_PS1}' > $null; "
         f"Set-Location '{CAM_DIR}'; "
-        f"idf.py build"
+        f"idf.py build; "
+        f"if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}"
     )
     res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd])
     if res.returncode != 0:

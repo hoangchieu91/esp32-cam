@@ -651,11 +651,12 @@
   <div id="tab-sd" class="tab-content">
     <div class="card">
       <div class="card-title">
-        <span>💾 Quản Lý Thẻ Nhớ MicroSD &amp; Cơ Chế Ghi Xoay Vòng (Ring-Buffer)</span>
+        <span>💾 Quản Lý Thẻ Nhớ MicroSD &amp; Kho Ảnh Đồng Bộ Server (.171)</span>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="loadSdFiles()">🔄 Làm mới</button>
+          <button class="btn btn-sm btn-primary" onclick="remountSdCard()">🔌 Nhận Lại Thẻ SD</button>
           <button class="btn btn-sm btn-accent" onclick="pruneSdFiles()">♻️ Dọn 5 Ảnh Cũ Nhất</button>
-          <button class="btn btn-sm btn-danger" onclick="formatSdCard()">🧹 Format Thẻ (FAT32 100%)</button>
+          <button class="btn btn-sm btn-danger" onclick="formatSdCard()">🧹 Format Thẻ (FAT32)</button>
         </div>
       </div>
 
@@ -680,8 +681,9 @@
 
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
         <div class="seg-group">
-          <button class="seg-btn active" id="sd-flt-all" onclick="setSdFilter('all')">Tất cả</button>
-          <button class="seg-btn" id="sd-flt-file" onclick="setSdFilter('file')">🖼️ Chỉ Ảnh Chụp</button>
+          <button class="seg-btn active" id="sd-flt-all" onclick="setSdFilter('all')">Tất cả (SD + .171)</button>
+          <button class="seg-btn" id="sd-flt-file" onclick="setSdFilter('file')">💾 Ảnh Thẻ SD</button>
+          <button class="seg-btn" id="sd-flt-cloud" onclick="setSdFilter('cloud')">☁️ Kho Ảnh Server .171</button>
           <button class="seg-btn" id="sd-flt-dir" onclick="setSdFilter('dir')">📁 Thư Mục Cũ</button>
         </div>
         <span style="font-size:11.5px;color:var(--muted)" id="sd-count-lbl">0 mục</span>

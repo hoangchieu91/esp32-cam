@@ -13,6 +13,9 @@
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdmmc_host.h"
+#include "esp_rom_sys.h"
+#include "soc/rtc_io_reg.h"
+#include "soc/soc.h"
 
 #include <string.h>
 #include <sys/stat.h>
@@ -195,15 +198,22 @@ void app_ext_io_init(void) {
     gpio_set_direction(REAR_LED_GPIO_NUM, GPIO_MODE_OUTPUT);
     gpio_set_level(REAR_LED_GPIO_NUM, (s_rear_led_mode == 1) ? 0 : 1);
 
-    // 2. GPIO 12: Auxiliary Relay / Solenoid Valve / Alarm Output (freed by 1-Bit SDMMC mode)
+    // 2. GPIO 12 (SD_DATA2): Keep pulled HIGH as input unless Relay Output is explicitly activated,
+    // so SD card DAT2/DAT3 bus lines stay cleanly at 3.3V high-impedance!
     gpio_reset_pin(RELAY_GPIO12_NUM);
-    gpio_pulldown_en(RELAY_GPIO12_NUM);
-    gpio_set_direction(RELAY_GPIO12_NUM, GPIO_MODE_OUTPUT);
-    gpio_set_level(RELAY_GPIO12_NUM, s_gpio12_relay_on ? 1 : 0);
+    if (s_gpio12_relay_on) {
+        gpio_set_direction(RELAY_GPIO12_NUM, GPIO_MODE_OUTPUT);
+        gpio_set_level(RELAY_GPIO12_NUM, 1);
+    } else {
+        gpio_set_direction(RELAY_GPIO12_NUM, GPIO_MODE_INPUT);
+        gpio_pulldown_dis(RELAY_GPIO12_NUM);
+        gpio_pullup_en(RELAY_GPIO12_NUM);
+    }
 
-    // 3. GPIO 13: Auxiliary Pulse Counter / Leak Flood / Tamper Reed Switch Input (freed by 1-Bit SDMMC mode)
+    // 3. GPIO 13 (SD_DATA3 / CS): Input with Pull-Up enabled (keeps SD Card CS HIGH in SDMMC mode)
     gpio_reset_pin(SENSOR_GPIO13_NUM);
     gpio_set_direction(SENSOR_GPIO13_NUM, GPIO_MODE_INPUT);
+    gpio_pulldown_dis(SENSOR_GPIO13_NUM);
     gpio_pullup_en(SENSOR_GPIO13_NUM);
     s_prev_gpio13_level = gpio_get_level(SENSOR_GPIO13_NUM);
     ESP_LOGI(TAG, "Expansion I/O initialized: GPIO33=RearLED(Heartbeat), GPIO12=RelayOut(LOW), GPIO13=SensorIn(%d)", s_prev_gpio13_level);
@@ -267,13 +277,61 @@ void app_reset_gpio13_pulses(void) {
 // ============================================================================
 // 3. MICROSD CARD 1-BIT SDMMC & RING-BUFFER AUTO-PRUNE
 // ============================================================================
+static void prepare_sdmmc_pins_before_mount(void) {
+    REG_WRITE(RTC_IO_DIG_PAD_HOLD_REG, 0);
+    CLEAR_PERI_REG_MASK(RTC_IO_TOUCH_PAD0_REG, RTC_IO_TOUCH_PAD0_HOLD | RTC_IO_TOUCH_PAD0_MUX_SEL);
+    CLEAR_PERI_REG_MASK(RTC_IO_TOUCH_PAD2_REG, RTC_IO_TOUCH_PAD2_HOLD | RTC_IO_TOUCH_PAD2_MUX_SEL);
+    CLEAR_PERI_REG_MASK(RTC_IO_TOUCH_PAD3_REG, RTC_IO_TOUCH_PAD3_HOLD | RTC_IO_TOUCH_PAD3_MUX_SEL);
+    CLEAR_PERI_REG_MASK(RTC_IO_TOUCH_PAD4_REG, RTC_IO_TOUCH_PAD4_HOLD | RTC_IO_TOUCH_PAD4_MUX_SEL);
+    CLEAR_PERI_REG_MASK(RTC_IO_TOUCH_PAD5_REG, RTC_IO_TOUCH_PAD5_HOLD | RTC_IO_TOUCH_PAD5_MUX_SEL);
+    CLEAR_PERI_REG_MASK(RTC_IO_TOUCH_PAD6_REG, RTC_IO_TOUCH_PAD6_HOLD | RTC_IO_TOUCH_PAD6_MUX_SEL);
+
+    const int sd_pins[] = {2, 4, 12, 13, 14, 15};
+    for (int i = 0; i < 6; i++) {
+        gpio_hold_dis((gpio_num_t)sd_pins[i]);
+    }
+
+    // Standard SD Physical Layer Power-Up Sequence:
+    // Hold CS/DAT3 (GPIO 13) and CMD (GPIO 15) HIGH while sending 80 dummy clock pulses on CLK (GPIO 14)
+    const int pullup_pins[] = {2, 12, 13, 14, 15};
+    for (int i = 0; i < 5; i++) {
+        gpio_num_t pin = (gpio_num_t)pullup_pins[i];
+        gpio_reset_pin(pin);
+        gpio_pulldown_dis(pin);
+        gpio_pullup_en(pin);
+    }
+    gpio_set_direction(GPIO_NUM_13, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_13, 1);
+    gpio_set_direction(GPIO_NUM_15, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_15, 1);
+    gpio_set_direction(GPIO_NUM_14, GPIO_MODE_OUTPUT);
+    for (int clk = 0; clk < 80; clk++) {
+        gpio_set_level(GPIO_NUM_14, 0);
+        esp_rom_delay_us(4);
+        gpio_set_level(GPIO_NUM_14, 1);
+        esp_rom_delay_us(4);
+    }
+    for (int i = 0; i < 5; i++) {
+        gpio_num_t pin = (gpio_num_t)pullup_pins[i];
+        gpio_set_direction(pin, GPIO_MODE_INPUT);
+        gpio_pulldown_dis(pin);
+        gpio_pullup_en(pin);
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+}
+
 void app_sd_init(bool rescue_mode) {
     s_rescue_flag = rescue_mode;
     if (rescue_mode) {
         app_set_sd_mounted(false, 0, 0, 0, "Rescue-Skipped");
         return;
     }
+    if (s_sd_card_ptr != NULL) {
+        return; // Already mounted
+    }
     ESP_LOGI(TAG, "Initializing SD Card (1-bit Mode)...");
+    prepare_sdmmc_pins_before_mount();
+
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,
         .max_files = 8,
@@ -289,8 +347,24 @@ void app_sd_init(bool rescue_mode) {
 
     esp_err_t ret = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &s_sd_card_ptr);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount SD card: %s", esp_err_to_name(ret));
-        app_set_sd_mounted(false, 0, 0, 0, "None");
+        ESP_LOGW(TAG, "SD mount at 20MHz returned 0x%x (%s), retrying at 10MHz...", ret, esp_err_to_name(ret));
+        vTaskDelay(pdMS_TO_TICKS(40));
+        prepare_sdmmc_pins_before_mount();
+        host.max_freq_khz = 10000;
+        ret = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &s_sd_card_ptr);
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "SD mount at 10MHz returned 0x%x (%s), retrying at 4MHz...", ret, esp_err_to_name(ret));
+        vTaskDelay(pdMS_TO_TICKS(40));
+        prepare_sdmmc_pins_before_mount();
+        host.max_freq_khz = 4000;
+        ret = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &s_sd_card_ptr);
+    }
+    if (ret != ESP_OK) {
+        char err_tag[32];
+        snprintf(err_tag, sizeof(err_tag), "Lỏng khe (0x%x)", (unsigned)ret);
+        ESP_LOGE(TAG, "Failed to mount SD card: %s (%s)", esp_err_to_name(ret), err_tag);
+        app_set_sd_mounted(false, 0, 0, 0, err_tag);
     } else {
         ESP_LOGI(TAG, "SD Card mounted successfully!");
         uint64_t hw_total_mb = ((uint64_t)s_sd_card_ptr->csd.capacity * s_sd_card_ptr->csd.sector_size) / (1024 * 1024);
@@ -340,7 +414,7 @@ void app_remount_sd_card(void) {
         esp_vfs_fat_sdcard_unmount("/sdcard", s_sd_card_ptr);
         s_sd_card_ptr = NULL;
     }
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(80));
     app_sd_init(s_rescue_flag);
 }
 
@@ -388,6 +462,9 @@ int app_prune_oldest_sd_files(int max_delete) {
 }
 
 void app_sd_check_auto_prune(uint32_t tick_sec) {
+    if (!s_rescue_flag && !s_sd_card_ptr && tick_sec == 15) {
+        app_remount_sd_card();
+    }
     if (g_cfg.sd_auto_prune && s_sd_card_ptr && (tick_sec % 60 == 0)) {
         FATFS *fs;
         DWORD fre_clust;
