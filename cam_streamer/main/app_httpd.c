@@ -1225,6 +1225,11 @@ static esp_err_t cmd_handler(httpd_req_t *req) {
             } else if (!strcmp(var, "serial_auto")) {
                 g_cfg.serial_auto_detect = (v != 0);
                 app_config_save();
+            } else if (!strcmp(var, "meter_max_flow_lpm")) {
+                if (v < 1) v = 1;
+                if (v > 500) v = 500;
+                g_cfg.meter_max_flow_lpm = (uint16_t)v;
+                app_config_save();
             } else if (!strcmp(var, "meter_rot_deg")) {
                 if (v < -180) v = -180;
                 if (v > 180) v = 180;

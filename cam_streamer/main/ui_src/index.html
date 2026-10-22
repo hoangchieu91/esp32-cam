@@ -702,8 +702,33 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
                 </select>
                 <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
                   <input type="checkbox" id="chk-adaptive-cycle" checked onchange="setCamCtrl('adaptive_cycle', this.checked ? 1 : 0)">
-                  ⚡ Tăng tốc (30s) khi nước chảy
+                  ⚡ Tăng tốc động khi chảy:
                 </label>
+                <select id="sel-fast-cycle" style="width:92px;padding:3px 6px;font-size:11px" onchange="setCamCtrl('fast_capture_sec', this.value)" title="Chu kỳ chụp nhanh tự động khi phát hiện có lưu lượng nước chảy hoặc phụ tải hoạt động">
+                  <option value="10">10 giây</option>
+                  <option value="15">15 giây</option>
+                  <option value="30" selected>30 giây</option>
+                  <option value="60">60 giây</option>
+                </select>
+              </div>
+              <div style="margin-top:8px;padding-top:7px;border-top:1px dashed rgba(245,158,11,0.28)">
+                <div class="ctrl-label">
+                  <span style="color:#fbbf24">🚦 Giới Hạn Lưu Lượng / Công Suất Tối Đa (Chặn Lọc Số Ảo &amp; Báo Vỡ Ống / Quá Tải)</span>
+                  <span id="lbl-max-flow" style="color:#38bdf8;font-weight:800;font-family:monospace">50 L/p (3.00 m³/h)</span>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+                  <input type="range" id="rng-max-flow" min="1" max="200" value="50" style="flex:1"
+                         oninput="onMaxFlowInput(this.value)"
+                         onchange="setCamCtrl('meter_max_flow_lpm', this.value)">
+                  <input type="number" id="inp-max-flow" min="1" max="500" value="50" style="width:68px;font-family:monospace;text-align:center;padding:4px"
+                         onchange="setMaxFlowPreset(this.value)">
+                </div>
+                <div class="btn-row" style="margin-top:5px">
+                  <button class="btn btn-sm" onclick="setMaxFlowPreset(25)" title="Đồng hồ hộ gia đình nhỏ (1.5 m³/h)">🏠 Hộ dân (25 L/p)</button>
+                  <button class="btn btn-sm" onclick="setMaxFlowPreset(50)" title="Đồng hồ chuẩn Q3=2.5 m³/h (GB/T778-2018)">💧 Chuẩn Q3 (50 L/p)</button>
+                  <button class="btn btn-sm" onclick="setMaxFlowPreset(100)" title="Đường ống nhánh / Biệt thự (6.0 m³/h)">🏢 Ống lớn (100 L/p)</button>
+                  <button class="btn btn-sm" onclick="setMaxFlowPreset(15)" title="Giới hạn công suất đồng hồ điện (15 kW)">⚡ Điện (15 kW)</button>
+                </div>
               </div>
             </div>
 
@@ -2127,6 +2152,24 @@ function setRotPreset(deg) {
   showToast(`🔄 Đã bù góc xoay mặt đồng hồ: ${deg}°`);
 }
 
+function onMaxFlowInput(val) {
+  const v = Math.max(1, Math.min(500, parseInt(val) || 50));
+  const m3h = (v * 60 / 1000).toFixed(2);
+  const lbl = document.getElementById('lbl-max-flow');
+  if (lbl) lbl.textContent = `${v} L/p (${m3h} m³/h)`;
+  const rng = document.getElementById('rng-max-flow');
+  if (rng && document.activeElement !== rng) rng.value = Math.min(200, v);
+  const inp = document.getElementById('inp-max-flow');
+  if (inp && document.activeElement !== inp) inp.value = v;
+}
+
+function setMaxFlowPreset(val) {
+  const v = Math.max(1, Math.min(500, parseInt(val) || 50));
+  onMaxFlowInput(v);
+  setCamCtrl('meter_max_flow_lpm', v);
+  showToast(`🚦 Đã đặt giới hạn Lưu lượng / Công suất: ${v} L/p (${(v * 60 / 1000).toFixed(2)} m³/h)`);
+}
+
 async function runRoiFocusSweep() {
   showToast('🔬 Đang quét tự động VCM (380..940) để tìm đỉnh nét cao nhất trong vùng ROI...');
   try {
@@ -2232,6 +2275,11 @@ async function loadConfig() {
     if (cpSel) cpSel.value = String(c.auto_capture_sec || 0);
     const adChk = document.getElementById('chk-adaptive-cycle');
     if (adChk) adChk.checked = c.adaptive_cycle_enable !== undefined ? !!c.adaptive_cycle_enable : true;
+    const fcSel = document.getElementById('sel-fast-cycle');
+    if (fcSel && c.fast_capture_sec) fcSel.value = String(c.fast_capture_sec);
+    if (c.meter_max_flow_lpm !== undefined) {
+      onMaxFlowInput(c.meter_max_flow_lpm);
+    }
 
     document.getElementById('cfg-edge-en').checked = !!c.edge_ai_enable;
     document.getElementById('cfg-edge-thresh').value = c.edge_motion_thresh || 20;
@@ -2326,6 +2374,8 @@ async function saveFullConfig() {
     sd_save_enable: document.getElementById('cfg-sd-en').checked ? 1 : 0,
     auto_capture_sec: parseInt(document.getElementById('cfg-auto-sec').value) || 0,
     adaptive_cycle_enable: document.getElementById('chk-adaptive-cycle').checked ? 1 : 0,
+    fast_capture_sec: parseInt(document.getElementById('sel-fast-cycle')?.value) || 30,
+    meter_max_flow_lpm: parseInt(document.getElementById('inp-max-flow')?.value) || 50,
     edge_ai_enable: document.getElementById('cfg-edge-en').checked ? 1 : 0,
     edge_motion_thresh: parseInt(document.getElementById('cfg-edge-thresh').value) || 20,
     edge_trigger_capture: document.getElementById('cfg-edge-trig').checked ? 1 : 0,

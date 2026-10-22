@@ -372,6 +372,24 @@ function setRotPreset(deg) {
   showToast(`🔄 Đã bù góc xoay mặt đồng hồ: ${deg}°`);
 }
 
+function onMaxFlowInput(val) {
+  const v = Math.max(1, Math.min(500, parseInt(val) || 50));
+  const m3h = (v * 60 / 1000).toFixed(2);
+  const lbl = document.getElementById('lbl-max-flow');
+  if (lbl) lbl.textContent = `${v} L/p (${m3h} m³/h)`;
+  const rng = document.getElementById('rng-max-flow');
+  if (rng && document.activeElement !== rng) rng.value = Math.min(200, v);
+  const inp = document.getElementById('inp-max-flow');
+  if (inp && document.activeElement !== inp) inp.value = v;
+}
+
+function setMaxFlowPreset(val) {
+  const v = Math.max(1, Math.min(500, parseInt(val) || 50));
+  onMaxFlowInput(v);
+  setCamCtrl('meter_max_flow_lpm', v);
+  showToast(`🚦 Đã đặt giới hạn Lưu lượng / Công suất: ${v} L/p (${(v * 60 / 1000).toFixed(2)} m³/h)`);
+}
+
 async function runRoiFocusSweep() {
   showToast('🔬 Đang quét tự động VCM (380..940) để tìm đỉnh nét cao nhất trong vùng ROI...');
   try {
@@ -477,6 +495,11 @@ async function loadConfig() {
     if (cpSel) cpSel.value = String(c.auto_capture_sec || 0);
     const adChk = document.getElementById('chk-adaptive-cycle');
     if (adChk) adChk.checked = c.adaptive_cycle_enable !== undefined ? !!c.adaptive_cycle_enable : true;
+    const fcSel = document.getElementById('sel-fast-cycle');
+    if (fcSel && c.fast_capture_sec) fcSel.value = String(c.fast_capture_sec);
+    if (c.meter_max_flow_lpm !== undefined) {
+      onMaxFlowInput(c.meter_max_flow_lpm);
+    }
 
     document.getElementById('cfg-edge-en').checked = !!c.edge_ai_enable;
     document.getElementById('cfg-edge-thresh').value = c.edge_motion_thresh || 20;
@@ -571,6 +594,8 @@ async function saveFullConfig() {
     sd_save_enable: document.getElementById('cfg-sd-en').checked ? 1 : 0,
     auto_capture_sec: parseInt(document.getElementById('cfg-auto-sec').value) || 0,
     adaptive_cycle_enable: document.getElementById('chk-adaptive-cycle').checked ? 1 : 0,
+    fast_capture_sec: parseInt(document.getElementById('sel-fast-cycle')?.value) || 30,
+    meter_max_flow_lpm: parseInt(document.getElementById('inp-max-flow')?.value) || 50,
     edge_ai_enable: document.getElementById('cfg-edge-en').checked ? 1 : 0,
     edge_motion_thresh: parseInt(document.getElementById('cfg-edge-thresh').value) || 20,
     edge_trigger_capture: document.getElementById('cfg-edge-trig').checked ? 1 : 0,
