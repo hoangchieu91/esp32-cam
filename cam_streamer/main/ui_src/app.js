@@ -29,29 +29,50 @@ function formatUptime(sec) {
 // ============================================================================
 // STREAM VIEWPORT & BANDWIDTH / THERMAL MANAGEMENT
 // ============================================================================
+let streamWatchdog = null;
+
 function applyStreamSource() {
   const sImg = document.getElementById('stream-img');
   if (snapTimer) { clearInterval(snapTimer); snapTimer = null; }
+  if (streamWatchdog) { clearTimeout(streamWatchdog); streamWatchdog = null; }
   if (document.hidden || currentTab !== 'live' || streamMode === 'pause') {
+    sImg.onload = null;
+    sImg.onerror = null;
     sImg.src = '';
     return;
   }
   if (streamMode === 'mjpeg') {
-    sImg.onerror = function() {
-      // Fallback to port 80 /stream if port 81 is blocked by NAT/Proxy
-      if (sImg.src.includes(':81/stream')) {
-        sImg.src = '/stream?t=' + Date.now();
+    const fallbackToSnap = () => {
+      if (streamWatchdog) { clearTimeout(streamWatchdog); streamWatchdog = null; }
+      if (streamMode === 'mjpeg') {
+        streamMode = 'snap';
+        ['mjpeg', 'snap', 'pause'].forEach(m => {
+          const b = document.getElementById('mode-btn-' + m);
+          if (b) b.classList.toggle('active', m === 'snap');
+        });
+        applyStreamSource();
+        showToast('📸 Tự chuyển sang Ảnh Tĩnh nhanh (Tối ưu 4G/VPN)');
       }
     };
+    sImg.onload = function() {
+      if (streamWatchdog) { clearTimeout(streamWatchdog); streamWatchdog = null; }
+    };
+    sImg.onerror = fallbackToSnap;
+    streamWatchdog = setTimeout(fallbackToSnap, 2200);
     sImg.src = 'http://' + window.location.hostname + ':81/stream?t=' + Date.now();
   } else if (streamMode === 'snap') {
+    sImg.onload = null;
     sImg.onerror = null;
-    sImg.src = '/snapshot?t=' + Date.now();
-    snapTimer = setInterval(() => {
-      if (!document.hidden && currentTab === 'live' && streamMode === 'snap') {
-        sImg.src = '/snapshot?t=' + Date.now();
-      }
-    }, 2000);
+    let snapBusy = false;
+    const loadNextSnap = () => {
+      if (document.hidden || currentTab !== 'live' || streamMode !== 'snap' || snapBusy) return;
+      snapBusy = true;
+      sImg.onload = () => { snapBusy = false; };
+      sImg.onerror = () => { snapBusy = false; };
+      sImg.src = '/snapshot?t=' + Date.now();
+    };
+    loadNextSnap();
+    snapTimer = setInterval(loadNextSnap, 1500);
   }
 }
 
@@ -108,7 +129,11 @@ function switchTab(id, btn) {
   applyStreamSource();
   if (id === 'sd') loadSdFiles();
   if (id === 'health') loadFreeRtosTasks();
-  if (id === 'aieyes') loadMultiScreens();
+  if (id === 'net') loadWgConfig();
+  if (id === 'aieyes') {
+    loadMultiScreens();
+    showAiDisplayCrop();
+  }
 }
 
 function switchSubTab(id, btn) {
@@ -1474,9 +1499,20 @@ function copyZeroPromptBlock() {
   navigator.clipboard.writeText(txt).then(() => showToast('📋 Đã copy câu lệnh Zero-Prompt cho AI!'));
 }
 
-// Initialize App
-applyStreamSource();
-loadConfig();
-loadWgConfig();
-updateStatus();
-setInterval(updateStatus, 2500);
+// Initialize App: Fetch /status FIRST with zero contention so UI badges & clock populate in <80ms,
+// then start video stream & config load after initial paint so iOS Safari completes page load immediately.
+(async function initApp() {
+  if (window.location.hostname === '10.212.156.7') {
+    streamMode = 'snap';
+    ['mjpeg', 'snap', 'pause'].forEach(m => {
+      const b = document.getElementById('mode-btn-' + m);
+      if (b) b.classList.toggle('active', m === 'snap');
+    });
+  }
+  await updateStatus();
+  setTimeout(() => {
+    applyStreamSource();
+    loadConfig();
+  }, 60);
+  setInterval(updateStatus, 2500);
+})();

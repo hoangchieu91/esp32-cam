@@ -238,8 +238,19 @@ void app_trigger_capture_pipeline(const char *source) {
 // HTTP HANDLERS
 // ============================================================================
 static esp_err_t index_handler(httpd_req_t *req) {
+    char etag[64];
+    snprintf(etag, sizeof(etag), "\"ui-%u-" __TIME__ "\"", (unsigned)index_html_gz_len);
+    char inm[64] = {0};
+    if (httpd_req_get_hdr_value_str(req, "If-None-Match", inm, sizeof(inm)) == ESP_OK) {
+        if (strcmp(inm, etag) == 0) {
+            httpd_resp_set_status(req, "304 Not Modified");
+            httpd_resp_set_hdr(req, "ETag", etag);
+            return httpd_resp_send(req, NULL, 0);
+        }
+    }
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_set_hdr(req, "ETag", etag);
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     return httpd_resp_send(req, (const char *)index_html_gz, index_html_gz_len);
 }
@@ -261,9 +272,12 @@ static esp_err_t status_handler(httpd_req_t *req) {
 
     sensor_t *s = esp_camera_sensor_get();
     uint8_t af_raw = 0;
-    bool af_focused = false, af_busy = false;
-    if (s && s->af_get_status) {
-        s->af_get_status(s, &af_raw, &af_focused, &af_busy);
+    bool af_focused = true, af_busy = false;
+    if (!app_cam_is_sleeping() && s && s->af_get_status) {
+        if (s_cam_mutex && xSemaphoreTake(s_cam_mutex, pdMS_TO_TICKS(15)) == pdTRUE) {
+            s->af_get_status(s, &af_raw, &af_focused, &af_busy);
+            xSemaphoreGive(s_cam_mutex);
+        }
     }
 
     char time_str[32];
@@ -668,10 +682,21 @@ static esp_err_t capture_handler(httpd_req_t *req) {
     return httpd_resp_send(req, out_json, strlen(out_json));
 }
 
-// Instant Snapshot with Timestamp OSD for external callers / AI Server polling
+// Instant Hardware-JPEG Snapshot (~35ms) for Web UI / 4G VPN / AI Server polling
+// Pass ?osd=1 if burned-in OSD is explicitly needed
 static esp_err_t snapshot_handler(httpd_req_t *req) {
-    if (s_cam_mutex) xSemaphoreTake(s_cam_mutex, pdMS_TO_TICKS(2000));
+    bool want_osd = false;
+    char query[64];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char val[16];
+        if (httpd_query_key_value(query, "osd", val, sizeof(val)) == ESP_OK && atoi(val) == 1) {
+            want_osd = true;
+        }
+    }
+
+    if (s_cam_mutex) xSemaphoreTake(s_cam_mutex, pdMS_TO_TICKS(1500));
     app_cam_wake_if_sleeping();
+    app_cam_touch_activity();
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
         if (s_cam_mutex) xSemaphoreGive(s_cam_mutex);
@@ -679,16 +704,24 @@ static esp_err_t snapshot_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    uint8_t *jpg_buf = NULL;
-    size_t jpg_len = 0;
-    bool allocated = false;
-    process_frame_osd_and_ai(fb->buf, fb->len, fb->width, fb->height, 85, NULL, &jpg_buf, &jpg_len, &allocated);
-
     httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=snapshot.jpg");
-    esp_err_t res = httpd_resp_send(req, (const char *)jpg_buf, jpg_len);
 
-    if (allocated && jpg_buf) free(jpg_buf);
+    esp_err_t res = ESP_OK;
+    if (want_osd) {
+        uint8_t *jpg_buf = NULL;
+        size_t jpg_len = 0;
+        bool allocated = false;
+        process_frame_osd_and_ai(fb->buf, fb->len, fb->width, fb->height, 85, NULL, &jpg_buf, &jpg_len, &allocated);
+        res = httpd_resp_send(req, (const char *)jpg_buf, jpg_len);
+        if (allocated && jpg_buf) free(jpg_buf);
+    } else {
+        // Direct zero-copy hardware JPEG from OV5640 DMA buffer (~35ms vs 2000ms)
+        res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
+    }
+
     esp_camera_fb_return(fb);
     if (s_cam_mutex) xSemaphoreGive(s_cam_mutex);
     return res;
@@ -1010,6 +1043,10 @@ void start_camera_server(void) {
     config.ctrl_port = 32768;
     config.stack_size = 8192;
     config.max_uri_handlers = 30;
+    config.max_open_sockets = 7;
+    config.lru_purge_enable = true;
+    config.recv_wait_timeout = 5;
+    config.send_wait_timeout = 5;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
     httpd_uri_t uris[] = {
@@ -1041,19 +1078,20 @@ void start_camera_server(void) {
         for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
             httpd_register_uri_handler(s_web_httpd, &uris[i]);
         }
-        ESP_LOGI(TAG, "Web Control Server started on port 80");
+        ESP_LOGI(TAG, "Web Control Server started on port 80 (LRU purge enabled)");
     }
 
-    // 2. Dedicated MJPEG Stream Server on Port 81 (also mounted on /stream via redirect/proxy or direct port 81)
-    // Wait: to keep /stream working seamlessly on port 80 when no other long request is blocking,
-    // AND also support port 81, we register /stream on port 81 AND on port 80!
+    // 2. Dedicated MJPEG Stream Server ONLY on Port 81 (never block Port 80 API thread!)
     httpd_uri_t stream_uri = {"/stream", HTTP_GET, stream_handler, NULL};
-    httpd_register_uri_handler(s_web_httpd, &stream_uri);
 
     httpd_config_t stream_cfg = HTTPD_DEFAULT_CONFIG();
     stream_cfg.server_port = 81;
     stream_cfg.ctrl_port = 32769;
     stream_cfg.stack_size = 8192;
+    stream_cfg.max_open_sockets = 3;
+    stream_cfg.lru_purge_enable = true;
+    stream_cfg.recv_wait_timeout = 4;
+    stream_cfg.send_wait_timeout = 4;
     if (httpd_start(&s_stream_httpd, &stream_cfg) == ESP_OK) {
         httpd_register_uri_handler(s_stream_httpd, &stream_uri);
         ESP_LOGI(TAG, "Dedicated Stream Server started on port 81");
