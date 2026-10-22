@@ -424,22 +424,49 @@ int app_prune_oldest_sd_files(int max_delete) {
     for (int iter = 0; iter < max_delete; iter++) {
         DIR *dir = opendir("/sdcard");
         if (!dir) break;
-        char oldest_name[128] = {0};
+        char oldest_rel[160] = {0};
+        char oldest_key[64] = {0};
+        char oldest_dir[64] = {0};
         struct dirent *de;
         while ((de = readdir(dir)) != NULL) {
             if (de->d_type == DT_REG && strncmp(de->d_name, "cam_", 4) == 0 && strstr(de->d_name, ".jpg")) {
-                if (oldest_name[0] == '\0' || strcmp(de->d_name, oldest_name) < 0) {
-                    strncpy(oldest_name, de->d_name, sizeof(oldest_name) - 1);
+                if (oldest_key[0] == '\0' || strcmp(de->d_name, oldest_key) < 0) {
+                    strncpy(oldest_key, de->d_name, sizeof(oldest_key) - 1);
+                    strncpy(oldest_rel, de->d_name, sizeof(oldest_rel) - 1);
+                    oldest_dir[0] = '\0';
+                }
+            } else if (de->d_type == DT_DIR &&
+                       ((strlen(de->d_name) == 10 && de->d_name[0] == '2' && de->d_name[4] == '-' && de->d_name[7] == '-') ||
+                        strcmp(de->d_name, "unsynced") == 0)) {
+                char sub_path[64];
+                snprintf(sub_path, sizeof(sub_path), "/sdcard/%.16s", de->d_name);
+                DIR *sdir = opendir(sub_path);
+                if (sdir) {
+                    struct dirent *sde;
+                    int cnt = 0;
+                    while ((sde = readdir(sdir)) != NULL) {
+                        if (sde->d_type == DT_REG && strncmp(sde->d_name, "cam_", 4) == 0 && strstr(sde->d_name, ".jpg")) {
+                            cnt++;
+                            if (oldest_key[0] == '\0' || strcmp(sde->d_name, oldest_key) < 0) {
+                                strncpy(oldest_key, sde->d_name, sizeof(oldest_key) - 1);
+                                snprintf(oldest_rel, sizeof(oldest_rel), "%.16s/%.64s", de->d_name, sde->d_name);
+                                strncpy(oldest_dir, sub_path, sizeof(oldest_dir) - 1);
+                            }
+                        }
+                    }
+                    closedir(sdir);
+                    if (cnt == 0) rmdir(sub_path);
                 }
             }
         }
         closedir(dir);
-        if (oldest_name[0] != '\0') {
-            char path[160];
-            snprintf(path, sizeof(path), "/sdcard/%s", oldest_name);
+        if (oldest_rel[0] != '\0') {
+            char path[200];
+            snprintf(path, sizeof(path), "/sdcard/%s", oldest_rel);
             if (unlink(path) == 0) {
                 deleted++;
                 ESP_LOGI(TAG, "SD Ring-Buffer Auto-Prune deleted oldest file: %s", path);
+                if (oldest_dir[0] != '\0') rmdir(oldest_dir);
             } else {
                 break;
             }

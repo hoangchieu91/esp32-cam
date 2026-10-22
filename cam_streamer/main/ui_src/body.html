@@ -226,29 +226,29 @@
 
             <div class="form-grid">
               <div class="ctrl-group">
-                <div class="ctrl-label"><span>Vị trí Ngang X (%)</span><span id="lbl-rx">20%</span></div>
-                <input type="range" id="rng-rx" min="0" max="85" value="20" oninput="updateRoiBox()" onchange="setCamCtrl('roi_x', this.value)">
+                <div class="ctrl-label"><span>Vị trí Ngang X (%)</span><span id="lbl-rx">8%</span></div>
+                <input type="range" id="rng-rx" min="0" max="85" value="8" oninput="updateRoiBox()" onchange="setCamCtrl('roi_x', this.value)">
               </div>
               <div class="ctrl-group">
-                <div class="ctrl-label"><span>Vị trí Dọc Y (%)</span><span id="lbl-ry">25%</span></div>
-                <input type="range" id="rng-ry" min="0" max="85" value="25" oninput="updateRoiBox()" onchange="setCamCtrl('roi_y', this.value)">
+                <div class="ctrl-label"><span>Vị trí Dọc Y (%)</span><span id="lbl-ry">3%</span></div>
+                <input type="range" id="rng-ry" min="0" max="85" value="3" oninput="updateRoiBox()" onchange="setCamCtrl('roi_y', this.value)">
               </div>
               <div class="ctrl-group">
-                <div class="ctrl-label"><span>Chiều Rộng W (%)</span><span id="lbl-rw">60%</span></div>
-                <input type="range" id="rng-rw" min="10" max="100" value="60" oninput="updateRoiBox()" onchange="setCamCtrl('roi_w', this.value)">
+                <div class="ctrl-label"><span>Chiều Rộng W (%)</span><span id="lbl-rw">84%</span></div>
+                <input type="range" id="rng-rw" min="10" max="100" value="84" oninput="updateRoiBox()" onchange="setCamCtrl('roi_w', this.value)">
               </div>
               <div class="ctrl-group">
-                <div class="ctrl-label"><span>Chiều Cao H (%)</span><span id="lbl-rh">45%</span></div>
-                <input type="range" id="rng-rh" min="10" max="100" value="45" oninput="updateRoiBox()" onchange="setCamCtrl('roi_h', this.value)">
+                <div class="ctrl-label"><span>Chiều Cao H (%)</span><span id="lbl-rh">94%</span></div>
+                <input type="range" id="rng-rh" min="10" max="100" value="94" oninput="updateRoiBox()" onchange="setCamCtrl('roi_h', this.value)">
               </div>
             </div>
 
             <div class="ctrl-group">
               <div class="ctrl-label">
                 <span>🔄 Bù Góc Lắp Nghiêng Đồng Hồ (Deskew Rotation: -180° ➔ +180°)</span>
-                <span id="lbl-rot-deg" style="color:#38bdf8;font-weight:800">0°</span>
+                <span id="lbl-rot-deg" style="color:#38bdf8;font-weight:800">-90°</span>
               </div>
-              <input type="range" id="rng-rot-deg" min="-180" max="180" value="0"
+              <input type="range" id="rng-rot-deg" min="-180" max="180" value="-90"
                      oninput="previewRotationDeg(this.value)"
                      onchange="setCamCtrl('meter_rot_deg', this.value)">
               <div class="btn-row" style="margin-top:4px">
@@ -679,18 +679,20 @@
         </div>
       </div>
 
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
         <div class="seg-group">
-          <button class="seg-btn active" id="sd-flt-all" onclick="setSdFilter('all')">Tất cả (SD + .171)</button>
-          <button class="seg-btn" id="sd-flt-file" onclick="setSdFilter('file')">💾 Ảnh Thẻ SD</button>
-          <button class="seg-btn" id="sd-flt-cloud" onclick="setSdFilter('cloud')">☁️ Kho Ảnh Server .171</button>
-          <button class="seg-btn" id="sd-flt-dir" onclick="setSdFilter('dir')">📁 Thư Mục Cũ</button>
+          <button class="seg-btn active" id="sd-flt-all" onclick="setSdFilter('all')">📚 Tất cả (Gộp theo Ngày)</button>
+          <button class="seg-btn" id="sd-flt-file" onclick="setSdFilter('file')">💾 Có trên Thẻ SD</button>
+          <button class="seg-btn" id="sd-flt-cloud" onclick="setSdFilter('cloud')">☁️ Có phân tích AI (.171)</button>
+          <button class="seg-btn" id="sd-flt-dir" onclick="setSdFilter('dir')">📁 Thư Mục Khác</button>
         </div>
-        <span style="font-size:11.5px;color:var(--muted)" id="sd-count-lbl">0 mục</span>
+        <span style="font-size:11.5px;color:var(--muted);font-weight:700" id="sd-count-lbl">0 mục</span>
       </div>
 
-      <div id="sd-file-list" class="file-grid">
-        <div style="color:var(--muted);font-size:13px">Đang tải danh sách tệp trên thẻ nhớ...</div>
+      <div id="sd-date-bar" class="date-pill-bar"></div>
+
+      <div id="sd-file-list" class="sd-folder-stack">
+        <div style="color:var(--muted);font-size:13px">Đang tải danh sách thư mục ngày trên thẻ nhớ...</div>
       </div>
     </div>
   </div>

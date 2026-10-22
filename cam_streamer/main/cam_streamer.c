@@ -357,16 +357,22 @@ void app_notify_flow_activity(bool active) {
 int custom_ov5640_af_set_manual_position(sensor_t *sensor, uint16_t position);
 
 static uint16_t ov5640_read_vcm_position(sensor_t *s) {
-    if (!s || !s->get_reg) return g_cfg.af_manual_pos;
+    if (!s || !s->get_reg || !s->set_reg) return g_cfg.af_manual_pos;
+    // Command 0x1A instructs OV5640 8051 MCU to copy internal RAM 0x4B (VCM step 0..255) to 0x3028
+    s->set_reg(s, 0x3023, 0xff, 0x01);
+    s->set_reg(s, 0x3022, 0xff, 0x1A);
+    for (int i = 0; i < 6; i++) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        if (s->get_reg(s, 0x3023, 0xff) == 0x00) break;
+    }
+    int r3028 = s->get_reg(s, 0x3028, 0xff);
     int r3603 = s->get_reg(s, 0x3603, 0xff);
     int r3602 = s->get_reg(s, 0x3602, 0xff);
-    int r3028 = s->get_reg(s, 0x3028, 0xff);
     uint16_t dac10 = 0;
-    if (r3603 >= 0 && r3602 >= 0) {
+    if (r3028 > 1 && r3028 <= 255) {
+        dac10 = (uint16_t)((r3028 * 1023UL) / 255UL);
+    } else if (r3603 >= 0 && r3602 >= 0) {
         dac10 = (uint16_t)(((r3603 & 0x3F) << 4) | ((r3602 >> 4) & 0x0F));
-    }
-    if (dac10 == 0 && r3028 > 0) {
-        dac10 = (uint16_t)((r3028 * 849UL) / 255UL);
     }
     return (dac10 > 0 && dac10 <= 1023) ? dac10 : g_cfg.af_manual_pos;
 }
@@ -411,13 +417,27 @@ static void app_cam_enter_sleep(void) {
 int custom_ov5640_af_set_manual_position(sensor_t *sensor, uint16_t position) {
     if (!sensor || !sensor->set_reg) return -1;
     if (position > 1023) position = 1023;
-    // Pause continuous AF (0x06 = AF_PAUSE, NEVER 0x08 which releases VCM back to 0!)
+    uint8_t step_u8 = (uint8_t)((position * 255UL) / 1023UL);
+    // 1. Pause continuous AF (0x06 = AF_PAUSE, NEVER 0x08 which releases VCM back to 0!)
     sensor->set_reg(sensor, 0x3022, 0xff, 0x06);
+    // 2. Send 8051 AF MCU command 0x19 (Manual VCM Step -> LCALL 0x0AFF VCM driver)
+    sensor->set_reg(sensor, 0x3027, 0xff, 0x00);    // PARA3 -> 0x4A = 0 (direct slew)
+    sensor->set_reg(sensor, 0x3028, 0xff, step_u8); // PARA4 -> 0x4B = VCM step (0..255)
+    sensor->set_reg(sensor, 0x3023, 0xff, 0x01);    // CMD_ACK = 1
+    sensor->set_reg(sensor, 0x3022, 0xff, 0x19);    // CMD_MAIN = 0x19
+    if (sensor->get_reg) {
+        for (int i = 0; i < 6; i++) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            if (sensor->get_reg(sensor, 0x3023, 0xff) == 0x00) break;
+        }
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(15));
+    }
+    // 3. Also program 10-bit VCM DAC registers 0x3602/0x3603 for sub-step accuracy
     uint8_t reg_3602 = (uint8_t)(((position & 0x0F) << 4) | 0x04);
     uint8_t reg_3603 = (uint8_t)((position >> 4) & 0x3F);
     sensor->set_reg(sensor, 0x3602, 0xff, reg_3602);
     sensor->set_reg(sensor, 0x3603, 0xff, reg_3603);
-    sensor->set_reg(sensor, 0x3028, 0xff, (uint8_t)(position >> 2));
     return 0;
 }
 

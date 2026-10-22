@@ -136,16 +136,19 @@ static esp_err_t execute_capture_pipeline(const char *mode, char *out_filename, 
     s_fb_fail_streak = 0;
     s_capture_ok_cnt++;
 
-    // Generate timestamp filename
+    // Generate timestamp filename & YYYY-MM-DD date folder
     time_t now;
     struct tm ti;
     time(&now);
     localtime_r(&now, &ti);
     char base_name[64];
+    char date_dir[16] = {0};
     if (now > 1700000000) {
         strftime(base_name, sizeof(base_name), "cam_%Y%m%d_%H%M%S.jpg", &ti);
+        strftime(date_dir, sizeof(date_dir), "%Y-%m-%d", &ti);
     } else {
         snprintf(base_name, sizeof(base_name), "cam_%lld.jpg", (long long)(esp_timer_get_time() / 1000ULL));
+        strncpy(date_dir, "unsynced", sizeof(date_dir) - 1);
     }
     if (out_filename) snprintf(out_filename, fn_len, "%s", base_name);
 
@@ -182,18 +185,27 @@ static esp_err_t execute_capture_pipeline(const char *mode, char *out_filename, 
 
     bool ai_only = (mode && (strcmp(mode, "ai_only") == 0 || strcmp(mode, "debug_board") == 0));
 
-    // 1. Save to SD Card (with Industrial Auto-Remount on failure)
+    // 1. Save to SD Card organized by Date Folder /sdcard/YYYY-MM-DD/cam_YYYYMMDD_HHMMSS.jpg
     if (!ai_only && g_cfg.sd_save_enable) {
         if (!s_sd_mounted) {
             app_remount_sd_card();
         }
         if (s_sd_mounted) {
-            char sd_path[96];
-            snprintf(sd_path, sizeof(sd_path), "/sdcard/%s", base_name);
+            char dir_path[48];
+            snprintf(dir_path, sizeof(dir_path), "/sdcard/%s", date_dir);
+            struct stat dst;
+            if (stat(dir_path, &dst) != 0) {
+                mkdir(dir_path, 0777);
+            }
+            char sd_path[120];
+            snprintf(sd_path, sizeof(sd_path), "/sdcard/%s/%s", date_dir, base_name);
             FILE *f = fopen(sd_path, "wb");
             if (!f) {
                 ESP_LOGW(TAG, "SD write failed, triggering Industrial SD Auto-Remount...");
                 app_remount_sd_card();
+                if (stat(dir_path, &dst) != 0) {
+                    mkdir(dir_path, 0777);
+                }
                 f = fopen(sd_path, "wb");
             }
             if (f) {
@@ -836,11 +848,60 @@ static esp_err_t snapshot_handler(httpd_req_t *req) {
     return res;
 }
 
+static bool is_date_folder_name(const char *s) {
+    if (!s) return false;
+    if (strcmp(s, "unsynced") == 0) return true;
+    if (strlen(s) != 10) return false;
+    return (s[0] == '2' && s[1] == '0' && s[4] == '-' && s[7] == '-');
+}
+
+static bool extract_date_from_cam_filename(const char *fn, char *out_date, size_t out_len) {
+    // Matches cam_YYYYMMDD_HHMMSS.jpg
+    if (!fn || strncmp(fn, "cam_20", 6) != 0 || strlen(fn) < 16) return false;
+    for (int i = 4; i < 12; i++) {
+        if (fn[i] < '0' || fn[i] > '9') return false;
+    }
+    snprintf(out_date, out_len, "%.4s-%.2s-%.2s", fn + 4, fn + 8, fn + 10);
+    return true;
+}
+
+static void migrate_flat_sd_files_to_date_dirs(void) {
+    if (!s_sd_mounted) return;
+    DIR *dir = opendir("/sdcard");
+    if (!dir) return;
+    char to_move[16][48];
+    int count = 0;
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL && count < 16) {
+        if (de->d_type == DT_REG && strncmp(de->d_name, "cam_20", 6) == 0 && strstr(de->d_name, ".jpg")) {
+            strncpy(to_move[count], de->d_name, sizeof(to_move[0]) - 1);
+            to_move[count][sizeof(to_move[0]) - 1] = '\0';
+            count++;
+        }
+    }
+    closedir(dir);
+    for (int i = 0; i < count; i++) {
+        char dstr[16];
+        if (extract_date_from_cam_filename(to_move[i], dstr, sizeof(dstr))) {
+            char dir_path[48], old_path[96], new_path[112];
+            snprintf(dir_path, sizeof(dir_path), "/sdcard/%s", dstr);
+            struct stat dst;
+            if (stat(dir_path, &dst) != 0) {
+                mkdir(dir_path, 0777);
+            }
+            snprintf(old_path, sizeof(old_path), "/sdcard/%s", to_move[i]);
+            snprintf(new_path, sizeof(new_path), "/sdcard/%s/%s", dstr, to_move[i]);
+            rename(old_path, new_path);
+        }
+    }
+}
+
 static esp_err_t list_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     if (!s_sd_mounted) {
         return httpd_resp_send(req, "[]", 2);
     }
+    migrate_flat_sd_files_to_date_dirs();
     httpd_resp_send_chunk(req, "[", 1);
     DIR *dir = opendir("/sdcard");
     bool first = true;
@@ -852,21 +913,54 @@ static esp_err_t list_handler(httpd_req_t *req) {
                 strcmp(de->d_name, "System Volume Information") == 0) continue;
             if (de->d_type == DT_REG) {
                 struct stat st;
-                char path[300];
-                snprintf(path, sizeof(path), "/sdcard/%s", de->d_name);
+                char path[160];
+                snprintf(path, sizeof(path), "/sdcard/%.120s", de->d_name);
                 if (stat(path, &st) == 0) {
-                    char item[384];
-                    snprintf(item, sizeof(item), "%s{\"name\":\"%s\",\"size\":%ld,\"type\":\"file\"}",
-                             first ? "" : ",", de->d_name, (long)st.st_size);
+                    char dstr[16] = "unsynced";
+                    extract_date_from_cam_filename(de->d_name, dstr, sizeof(dstr));
+                    char item[256];
+                    snprintf(item, sizeof(item),
+                             "%s{\"name\":\"%.64s\",\"file\":\"%.64s\",\"date\":\"%.15s\",\"size\":%ld,\"type\":\"file\"}",
+                             first ? "" : ",", de->d_name, de->d_name, dstr, (long)st.st_size);
                     httpd_resp_send_chunk(req, item, strlen(item));
                     first = false;
                 }
             } else if (de->d_type == DT_DIR && strcmp(de->d_name, ".") != 0 && strcmp(de->d_name, "..") != 0) {
-                char item[384];
-                snprintf(item, sizeof(item), "%s{\"name\":\"%s/\",\"size\":0,\"type\":\"dir\"}",
-                         first ? "" : ",", de->d_name);
-                httpd_resp_send_chunk(req, item, strlen(item));
-                first = false;
+                if (is_date_folder_name(de->d_name)) {
+                    char sub_path[64];
+                    snprintf(sub_path, sizeof(sub_path), "/sdcard/%.16s", de->d_name);
+                    DIR *sdir = opendir(sub_path);
+                    if (sdir) {
+                        struct dirent *sde;
+                        int sub_cnt = 0;
+                        while ((sde = readdir(sdir)) != NULL) {
+                            if (sde->d_name[0] == '.') continue;
+                            if (sde->d_type == DT_REG) {
+                                sub_cnt++;
+                                struct stat st;
+                                char fpath[160];
+                                snprintf(fpath, sizeof(fpath), "/sdcard/%.16s/%.64s", de->d_name, sde->d_name);
+                                long fsz = (stat(fpath, &st) == 0) ? (long)st.st_size : 0;
+                                char item[256];
+                                snprintf(item, sizeof(item),
+                                         "%s{\"name\":\"%.16s/%.64s\",\"file\":\"%.64s\",\"date\":\"%.16s\",\"size\":%ld,\"type\":\"file\"}",
+                                         first ? "" : ",", de->d_name, sde->d_name, sde->d_name, de->d_name, fsz);
+                                httpd_resp_send_chunk(req, item, strlen(item));
+                                first = false;
+                            }
+                        }
+                        closedir(sdir);
+                        if (sub_cnt == 0) {
+                            rmdir(sub_path);
+                        }
+                    }
+                } else {
+                    char item[160];
+                    snprintf(item, sizeof(item), "%s{\"name\":\"%.64s/\",\"size\":0,\"type\":\"dir\"}",
+                             first ? "" : ",", de->d_name);
+                    httpd_resp_send_chunk(req, item, strlen(item));
+                    first = false;
+                }
             }
         }
         closedir(dir);
@@ -876,13 +970,29 @@ static esp_err_t list_handler(httpd_req_t *req) {
 }
 
 static esp_err_t sdcard_file_handler(httpd_req_t *req) {
-    // URI is /sdcard/filename.jpg
+    // URI is /sdcard/filename.jpg or /sdcard/YYYY-MM-DD/filename.jpg
     const char *uri = req->uri;
     if (strstr(uri, "..")) {
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
-    FILE *f = fopen(uri, "rb");
+    // Strip optional query string if present
+    char clean_uri[128];
+    strncpy(clean_uri, uri, sizeof(clean_uri) - 1);
+    clean_uri[sizeof(clean_uri) - 1] = '\0';
+    char *q = strchr(clean_uri, '?');
+    if (q) *q = '\0';
+
+    FILE *f = fopen(clean_uri, "rb");
+    if (!f && strncmp(clean_uri, "/sdcard/cam_20", 14) == 0) {
+        const char *fn = clean_uri + 8;
+        char dstr[16];
+        if (extract_date_from_cam_filename(fn, dstr, sizeof(dstr))) {
+            char alt_path[160];
+            snprintf(alt_path, sizeof(alt_path), "/sdcard/%.15s/%.64s", dstr, fn);
+            f = fopen(alt_path, "rb");
+        }
+    }
     if (!f) {
         httpd_resp_send_404(req);
         return ESP_FAIL;
@@ -899,15 +1009,66 @@ static esp_err_t sdcard_file_handler(httpd_req_t *req) {
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+static void url_decode_inplace(char *s) {
+    char *dst = s;
+    for (const char *src = s; *src; src++) {
+        if (src[0] == '%' && src[1] && src[2]) {
+            char hex[3] = {src[1], src[2], '\0'};
+            *dst++ = (char)strtol(hex, NULL, 16);
+            src += 2;
+        } else if (*src == '+') {
+            *dst++ = ' ';
+        } else {
+            *dst++ = *src;
+        }
+    }
+    *dst = '\0';
+}
+
 static esp_err_t delete_handler(httpd_req_t *req) {
-    char query[128], file[64];
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
-        httpd_query_key_value(query, "file", file, sizeof(file)) == ESP_OK) {
-        if (!strstr(file, "..") && !strchr(file, '/')) {
-            char path[96];
-            snprintf(path, sizeof(path), "/sdcard/%s", file);
-            unlink(path);
-            ESP_LOGI(TAG, "Deleted SD file: %s", path);
+    char query[160], file[96], date_arg[24];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        if (httpd_query_key_value(query, "date", date_arg, sizeof(date_arg)) == ESP_OK) {
+            url_decode_inplace(date_arg);
+            if (!strstr(date_arg, "..") && !strchr(date_arg, '/') && is_date_folder_name(date_arg)) {
+                char dpath[64];
+                snprintf(dpath, sizeof(dpath), "/sdcard/%.16s", date_arg);
+                DIR *dir = opendir(dpath);
+                if (dir) {
+                    struct dirent *de;
+                    while ((de = readdir(dir)) != NULL) {
+                        if (de->d_name[0] == '.') continue;
+                        char fpath[160];
+                        snprintf(fpath, sizeof(fpath), "%.32s/%.64s", dpath, de->d_name);
+                        unlink(fpath);
+                    }
+                    closedir(dir);
+                }
+                rmdir(dpath);
+                ESP_LOGI(TAG, "Deleted SD date folder: %s", dpath);
+            }
+        } else if (httpd_query_key_value(query, "file", file, sizeof(file)) == ESP_OK) {
+            url_decode_inplace(file);
+            if (!strstr(file, "..") && file[0] != '/') {
+                char path[160];
+                snprintf(path, sizeof(path), "/sdcard/%.80s", file);
+                if (unlink(path) != 0 && !strchr(file, '/')) {
+                    char dstr[16];
+                    if (extract_date_from_cam_filename(file, dstr, sizeof(dstr))) {
+                        snprintf(path, sizeof(path), "/sdcard/%.15s/%.64s", dstr, file);
+                        unlink(path);
+                    }
+                }
+                ESP_LOGI(TAG, "Deleted SD file: %s", path);
+                // If inside a date folder, remove folder if now empty
+                char *slash = strchr(file, '/');
+                if (slash) {
+                    *slash = '\0';
+                    char dpath[64];
+                    snprintf(dpath, sizeof(dpath), "/sdcard/%.16s", file);
+                    rmdir(dpath);
+                }
+            }
         }
     }
     httpd_resp_set_type(req, "application/json");
@@ -1071,12 +1232,16 @@ static esp_err_t cmd_handler(httpd_req_t *req) {
                 app_config_save();
             } else if (!strcmp(var, "roi_x")) {
                 g_cfg.roi_x_pct = (uint8_t)v;
+                app_config_save();
             } else if (!strcmp(var, "roi_y")) {
                 g_cfg.roi_y_pct = (uint8_t)v;
+                app_config_save();
             } else if (!strcmp(var, "roi_w")) {
                 g_cfg.roi_w_pct = (uint8_t)v;
+                app_config_save();
             } else if (!strcmp(var, "roi_h")) {
                 g_cfg.roi_h_pct = (uint8_t)v;
+                app_config_save();
             } else if (!strcmp(var, "roi_save")) {
                 app_config_save();
             } else if (!strcmp(var, "rescue_mode")) {

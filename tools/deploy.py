@@ -31,10 +31,25 @@ BIN_PATH = CAM_DIR / "build" / "cam_streamer.bin"
 AI_SERVER_SCRIPT = ROOT_DIR / "server_ai_171" / "esp32cam_ai_server.py"
 IDF_EXPORT_PS1 = Path(r"C:\Users\nguye\esp\v5.5.1\esp-idf\export.ps1")
 
+import socket
+
 DEFAULT_ESP_HOSTS = ["10.25.7.100", "10.212.156.7", "esp32-cam.local"]
-AI_SERVER_HOST = "10.25.7.171"
+AI_SERVER_CANDIDATES = ["10.25.7.171", "100.117.215.125"]
 AI_SERVER_USER = "root"
 AI_SERVER_PASS = "123"
+
+
+def resolve_ai_server_host() -> str:
+    for host in AI_SERVER_CANDIDATES:
+        try:
+            with socket.create_connection((host, 8095), timeout=1.5):
+                return host
+        except Exception:
+            continue
+    return AI_SERVER_CANDIDATES[0]
+
+
+AI_SERVER_HOST = resolve_ai_server_host()
 
 
 def step_pack_ui() -> None:

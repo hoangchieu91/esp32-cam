@@ -415,7 +415,32 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 }
 .wifi-slot.active-slot { border-color: var(--success); background: rgba(16,185,129,0.05); }
 .slot-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px; font-size: 11.5px; font-weight: 700; }
-.file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; max-height: 520px; overflow-y: auto; }
+.file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 8px; }
+.sd-folder-stack { display: flex; flex-direction: column; gap: 10px; max-height: 620px; overflow-y: auto; padding-right: 2px; }
+.date-pill-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.date-pill {
+  background: #070b14; color: var(--muted); border: 1px solid var(--border);
+  padding: 5px 10px; border-radius: 99px; font-size: 11px; font-weight: 700;
+  cursor: pointer; transition: 0.15s; display: inline-flex; align-items: center; gap: 5px;
+}
+.date-pill:hover { color: var(--text); border-color: rgba(56,189,248,0.4); }
+.date-pill.active {
+  background: rgba(14,165,233,0.18); color: #38bdf8; border-color: rgba(56,189,248,0.5);
+}
+.date-folder-card {
+  background: #070b14; border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+}
+.date-folder-hdr {
+  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 10px 13px; background: rgba(14,165,233,0.06); cursor: pointer; user-select: none;
+  border-bottom: 1px solid rgba(255,255,255,0.05); transition: 0.15s;
+}
+.date-folder-hdr:hover { background: rgba(14,165,233,0.11); }
+.date-folder-title {
+  font-size: 13px; font-weight: 800; color: #f8fafc; display: flex; align-items: center; gap: 7px;
+}
+.date-folder-body { padding: 10px; display: none; }
+.date-folder-body.open { display: block; }
 .file-row {
   display: flex; justify-content: space-between; align-items: center;
   background: rgba(255,255,255,0.025); padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border);

@@ -1182,8 +1182,50 @@ async function connectWifiSlot(slot) {
 }
 
 // ============================================================================
-// SD CARD GALLERY, FILTERING & IN-PAGE LIGHTBOX PREVIEW
+// SD CARD GALLERY, DATE FOLDER GROUPING & IN-PAGE LIGHTBOX PREVIEW
 // ============================================================================
+let sdSelectedDate = 'all';
+const sdExpandedDates = {};
+const sdShowAllDates = {};
+
+function extractDateAndTimeFromCamName(fn, fallbackDate, fallbackTs) {
+  const clean = (fn || '').split('/').pop();
+  const m = clean.match(/cam_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+  if (m) {
+    return {
+      date: `${m[1]}-${m[2]}-${m[3]}`,
+      timeStr: `${m[4]}:${m[5]}:${m[6]}`,
+      fileKey: clean
+    };
+  }
+  if (fallbackTs && fallbackTs.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(fallbackTs)) {
+    return {
+      date: fallbackTs.slice(0, 10),
+      timeStr: fallbackTs.slice(11, 19) || '--:--:--',
+      fileKey: clean
+    };
+  }
+  return {
+    date: fallbackDate || 'unsynced',
+    timeStr: '--:--:--',
+    fileKey: clean
+  };
+}
+
+function formatFriendlyDateLabel(dateStr) {
+  if (dateStr === 'unsynced') return '🕒 Chưa đồng bộ giờ NTP (unsynced)';
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const todayStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  const yest = new Date(now.getTime() - 86400000);
+  const yestStr = `${yest.getFullYear()}-${pad(yest.getMonth()+1)}-${pad(yest.getDate())}`;
+  const parts = dateStr.split('-');
+  const vnDate = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : dateStr;
+  if (dateStr === todayStr) return `${vnDate} (${dateStr} • Hôm nay)`;
+  if (dateStr === yestStr) return `${vnDate} (${dateStr} • Hôm qua)`;
+  return `Ngày ${vnDate} (${dateStr})`;
+}
+
 function setSdFilter(mode) {
   sdFilterMode = mode;
   ['all', 'file', 'cloud', 'dir'].forEach(m => {
@@ -1193,17 +1235,36 @@ function setSdFilter(mode) {
   renderSdGallery();
 }
 
+function setSdDateFilter(dateStr) {
+  sdSelectedDate = dateStr;
+  if (dateStr !== 'all') {
+    sdExpandedDates[dateStr] = true;
+  }
+  renderSdGallery();
+}
+
+function toggleDateFolder(dateStr) {
+  sdExpandedDates[dateStr] = !sdExpandedDates[dateStr];
+  renderSdGallery();
+}
+
+function expandAllInDateFolder(dateStr, ev) {
+  if (ev) ev.stopPropagation();
+  sdShowAllDates[dateStr] = true;
+  renderSdGallery();
+}
+
 function openImgModal(name, sizeKb, customUrl, metaSummary) {
   const m = document.getElementById('img-modal');
-  const url = customUrl || ('/sdcard/' + encodeURIComponent(name));
+  const url = customUrl || ('/sdcard/' + name.split('/').map(encodeURIComponent).join('/'));
   document.getElementById('modal-title').textContent = (customUrl ? '☁️ ' : '🖼️ ') + name;
   document.getElementById('modal-img').src = url;
   document.getElementById('modal-meta').textContent = metaSummary
-    ? `${metaSummary} | Nguồn: Kho Lưu Trữ Server .171`
+    ? `${metaSummary} | Đường dẫn: ${customUrl ? 'Kho Server .171' : ('/sdcard/' + name)}`
     : `Dung lượng: ${sizeKb} KB | Đường dẫn: /sdcard/${name}`;
   const dl = document.getElementById('modal-dl');
   dl.href = url;
-  dl.download = name;
+  dl.download = name.split('/').pop();
   const delBtn = document.getElementById('modal-del');
   if (delBtn) {
     delBtn.style.display = customUrl ? 'none' : 'inline-flex';
@@ -1222,95 +1283,225 @@ function closeImgModal() {
 
 function renderSdGallery() {
   const box = document.getElementById('sd-file-list');
-  const filtered = sdCacheFiles.filter(f => sdFilterMode === 'all' ? true : f.type === sdFilterMode);
-  document.getElementById('sd-count-lbl').textContent = `${filtered.length} / ${sdCacheFiles.length} mục`;
-  if (!filtered.length) {
-    box.innerHTML = '<div style="color:var(--muted);padding:12px">Không có mục nào trong bộ lọc này.</div>';
+  const dateBar = document.getElementById('sd-date-bar');
+
+  const filteredByType = sdCacheFiles.filter(f => {
+    if (sdFilterMode === 'all') return f.type !== 'dir';
+    if (sdFilterMode === 'file') return !!f.hasSd;
+    if (sdFilterMode === 'cloud') return !!f.hasCloud;
+    if (sdFilterMode === 'dir') return f.type === 'dir';
+    return true;
+  });
+
+  if (sdFilterMode === 'dir') {
+    if (dateBar) dateBar.innerHTML = '';
+    document.getElementById('sd-count-lbl').textContent = `${filteredByType.length} thư mục khác`;
+    if (!filteredByType.length) {
+      box.innerHTML = '<div style="color:var(--muted);padding:12px">Không có thư mục lạ nào trên thẻ nhớ (Toàn bộ ảnh đã được quy hoạch gọn theo thư mục Ngày YYYY-MM-DD).</div>';
+      return;
+    }
+    box.innerHTML = '<div class="file-grid">' + filteredByType.map(f => `
+      <div class="file-row" style="background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.22)">
+        <div class="file-info">
+          <span class="file-name" style="color:#fbbf24">📁 ${f.name}</span>
+          <span class="file-meta">Thư mục hệ thống / cũ trên thẻ</span>
+        </div>
+        <span class="badge warn">Thư mục</span>
+      </div>`).join('') + '</div>';
     return;
   }
-  box.innerHTML = filtered.map(f => {
-    if (f.type === 'dir') {
-      return `
-        <div class="file-row" style="background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.22)">
-          <div class="file-info">
-            <span class="file-name" style="color:#fbbf24">📁 ${f.name}</span>
-            <span class="file-meta">Thư mục cũ trên thẻ (Dùng Format FAT32 để dọn)</span>
-          </div>
-          <span class="badge warn">Thư mục</span>
-        </div>`;
+
+  // Group by Date (YYYY-MM-DD)
+  const dateMap = {};
+  filteredByType.forEach(f => {
+    const d = f.date || 'unsynced';
+    if (!dateMap[d]) dateMap[d] = [];
+    dateMap[d].push(f);
+  });
+  const sortedDates = Object.keys(dateMap).sort((a, b) => b.localeCompare(a));
+
+  if (sdSelectedDate !== 'all' && !dateMap[sdSelectedDate]) {
+    sdSelectedDate = 'all';
+  }
+
+  // Ensure newest date folder is expanded by default on first load
+  if (sortedDates.length > 0 && Object.keys(sdExpandedDates).length === 0) {
+    sdExpandedDates[sortedDates[0]] = true;
+  }
+
+  // Render Date Filter Pill Bar
+  if (dateBar) {
+    if (sortedDates.length === 0) {
+      dateBar.innerHTML = '';
+    } else {
+      const pills = [`<button class="date-pill ${sdSelectedDate === 'all' ? 'active' : ''}" onclick="setSdDateFilter('all')">📅 Tất cả các ngày (${sortedDates.length} thư mục • ${filteredByType.length} ảnh)</button>`];
+      sortedDates.forEach(d => {
+        const items = dateMap[d];
+        const sdCnt = items.filter(x => x.hasSd).length;
+        const shortLbl = d === 'unsynced' ? 'Chưa đồng bộ giờ' : d;
+        pills.push(`<button class="date-pill ${sdSelectedDate === d ? 'active' : ''}" onclick="setSdDateFilter('${d}')">📁 ${shortLbl} <span style="opacity:0.8">(${items.length}${sdCnt ? ' • 💾' + sdCnt : ''})</span></button>`);
+      });
+      dateBar.innerHTML = pills.join('');
     }
-    if (f.type === 'cloud') {
+  }
+
+  const visibleDates = sdSelectedDate === 'all' ? sortedDates : (dateMap[sdSelectedDate] ? [sdSelectedDate] : []);
+  const totalVisibleImgs = visibleDates.reduce((acc, d) => acc + dateMap[d].length, 0);
+  document.getElementById('sd-count-lbl').textContent = `${ visibleDates.length } thư mục ngày • ${ totalVisibleImgs } ảnh`;
+
+  if (!visibleDates.length) {
+    box.innerHTML = '<div style="color:var(--muted);padding:12px">Chưa có ảnh nào trong bộ lọc này.</div>';
+    return;
+  }
+
+  box.innerHTML = visibleDates.map((d, idx) => {
+    const items = dateMap[d];
+    const isOpen = sdSelectedDate !== 'all' ? true : (sdExpandedDates[d] !== undefined ? sdExpandedDates[d] : (idx === 0));
+    const sdItems = items.filter(x => x.hasSd);
+    const cloudItems = items.filter(x => x.hasCloud);
+    const totalBytes = sdItems.reduce((s, x) => s + (x.size || 0), 0);
+    const sizeStr = totalBytes > 1048576 ? `${(totalBytes / 1048576).toFixed(2)} MB` : `${(totalBytes / 1024).toFixed(0)} KB`;
+    const newestTime = items[0] && items[0].timeStr ? items[0].timeStr : '--:--:--';
+
+    const limit = sdShowAllDates[d] ? items.length : 24;
+    const shownItems = items.slice(0, limit);
+    const hiddenCount = Math.max(0, items.length - shownItems.length);
+
+    const rowsHtml = shownItems.map(f => {
+      const kb = f.size ? (f.size / 1024).toFixed(1) : '--';
       const safeSum = (f.summary || '').replace(/'/g, '');
+      const sdUrl = f.sdPath ? ('/sdcard/' + f.sdPath.split('/').map(encodeURIComponent).join('/')) : '';
+      const primaryViewCall = f.hasSd
+        ? `openImgModal('${f.sdPath}', '${kb}', '', '${safeSum ? safeSum + ' | ' : ''}Dung lượng: ${kb} KB')`
+        : `openImgModal('${f.fileKey}', '--', '${f.annUrl}', '${safeSum} (${f.timestamp || ''})')`;
+
+      const badges = [];
+      if (f.hasSd) badges.push(`<span style="color:#38bdf8">💾 SD ${kb}KB</span>`);
+      if (f.hasCloud) badges.push(`<span style="color:#34d399;font-weight:700">${f.summary || '☁️ Server .171'}</span>`);
+
       return `
-        <div class="file-row" style="background:rgba(14,165,233,0.07);border-color:rgba(56,189,248,0.25)">
-          <div class="file-info" onclick="openImgModal('${f.name}', '--', '${f.annUrl}', '${safeSum} (${f.timestamp || ''})')">
-            <span class="file-name" style="color:#38bdf8">☁️ ${f.name}</span>
-            <span class="file-meta">${f.timestamp || ''} • <b style="color:#34d399">${f.summary || 'Đã đồng bộ Server .171'}</b></span>
+        <div class="file-row" style="${f.hasCloud && !f.hasSd ? 'background:rgba(14,165,233,0.06);border-color:rgba(56,189,248,0.22)' : ''}">
+          <div class="file-info" onclick="${primaryViewCall}">
+            <span class="file-name">🕒 <b style="color:#fbbf24">${f.timeStr}</b> — ${f.fileKey}</span>
+            <span class="file-meta">${badges.join(' • ')}</span>
           </div>
-          <div style="display:flex;gap:5px;flex-shrink:0">
-            <button class="btn btn-sm" title="Xem ảnh AI chấm điểm" onclick="openImgModal('${f.name}', '--', '${f.annUrl}', '${safeSum} (${f.timestamp || ''})')">🎯 AI</button>
-            <button class="btn btn-sm" title="Xem ảnh gốc" onclick="openImgModal('${f.name}', '--', '${f.rawUrl}', '${safeSum} (${f.timestamp || ''})')">👁️ Gốc</button>
-            <a class="btn btn-sm" href="${f.rawUrl}" target="_blank" download="${f.name}">⬇️</a>
+          <div style="display:flex;gap:4px;flex-shrink:0">
+            ${f.hasCloud ? `<button class="btn btn-sm" title="Xem ảnh AI chấm điểm" onclick="openImgModal('${f.fileKey}', '--', '${f.annUrl}', '${safeSum} (${f.timestamp || ''})')">🎯 AI</button>` : ''}
+            ${f.hasSd ? `<button class="btn btn-sm" title="Xem ảnh trên Thẻ SD" onclick="openImgModal('${f.sdPath}', '${kb}')">👁️</button>` : `<button class="btn btn-sm" title="Xem ảnh gốc (.171)" onclick="openImgModal('${f.fileKey}', '--', '${f.rawUrl}', '${safeSum}')">👁️</button>`}
+            <a class="btn btn-sm" href="${f.hasSd ? sdUrl : f.rawUrl}" target="_blank" download="${f.fileKey}">⬇️</a>
+            ${f.hasSd ? `<button class="btn btn-sm btn-danger" title="Xóa ảnh trên Thẻ SD" onclick="delSdFile('${f.sdPath}')">🗑️</button>` : ''}
           </div>
         </div>`;
-    }
-    const kb = (f.size / 1024).toFixed(1);
+    }).join('');
+
+    const moreBtnHtml = hiddenCount > 0
+      ? `<div style="margin-top:8px;text-align:center">
+           <button class="btn btn-sm" onclick="expandAllInDateFolder('${d}', event)">🔽 Xem thêm ${hiddenCount} ảnh nữa trong ngày ${d} (Tổng ${items.length} ảnh)</button>
+         </div>`
+      : '';
+
     return `
-      <div class="file-row">
-        <div class="file-info" onclick="openImgModal('${f.name}', '${kb}')">
-          <span class="file-name">🖼️ ${f.name}</span>
-          <span class="file-meta">${kb} KB • Lưu trên Thẻ SD cục bộ</span>
+      <div class="date-folder-card">
+        <div class="date-folder-hdr" onclick="toggleDateFolder('${d}')">
+          <div class="date-folder-title">
+            <span>${isOpen ? '📂' : '📁'} ${formatFriendlyDateLabel(d)}</span>
+            <span class="badge info">${items.length} ảnh</span>
+            ${sdItems.length ? `<span class="badge ok">💾 Thẻ SD: ${sdItems.length} (${sizeStr})</span>` : ''}
+            ${cloudItems.length ? `<span class="badge" style="color:#38bdf8;border-color:rgba(56,189,248,0.3)">☁️ AI .171: ${cloudItems.length}</span>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:6px" onclick="event.stopPropagation()">
+            <span style="font-size:11px;color:var(--muted)">Mới nhất: <b style="color:#f8fafc">${newestTime}</b></span>
+            ${sdItems.length ? `<button class="btn btn-sm btn-danger" title="Xóa toàn bộ thư mục ngày ${d} trên Thẻ SD" onclick="delSdDateFolder('${d}', ${sdItems.length})">🗑️ Xóa ngày</button>` : ''}
+            <button class="btn btn-sm" onclick="toggleDateFolder('${d}')">${isOpen ? '▲ Thu gọn' : '▼ Mở thư mục'}</button>
+          </div>
         </div>
-        <div style="display:flex;gap:5px;flex-shrink:0">
-          <button class="btn btn-sm" onclick="openImgModal('${f.name}', '${kb}')">👁️</button>
-          <a class="btn btn-sm" href="/sdcard/${encodeURIComponent(f.name)}" download="${f.name}">⬇️</a>
-          <button class="btn btn-sm btn-danger" onclick="delSdFile('${f.name}')">🗑️</button>
+        <div class="date-folder-body ${isOpen ? 'open' : ''}">
+          <div class="file-grid">${rowsHtml}</div>
+          ${moreBtnHtml}
         </div>
       </div>`;
   }).join('');
 }
 
 async function loadSdFiles() {
-  const box = document.getElementById('sd-file-list');
-  let combined = [];
+  const byKey = {};
+  const dirs = [];
+
   try {
     const r = await fetch('/list');
     const files = await r.json();
-    files.sort((a,b) => {
-      if (a.type !== b.type) return a.type === 'file' ? -1 : 1;
-      return b.name.localeCompare(a.name);
+    files.forEach(f => {
+      if (f.type === 'dir') {
+        dirs.push(f);
+        return;
+      }
+      const info = extractDateAndTimeFromCamName(f.file || f.name, f.date, '');
+      const key = info.fileKey;
+      if (!byKey[key]) {
+        byKey[key] = {
+          fileKey: key,
+          name: f.name,
+          sdPath: f.name,
+          date: f.date || info.date,
+          timeStr: info.timeStr,
+          size: f.size || 0,
+          type: 'file',
+          hasSd: true,
+          hasCloud: false
+        };
+      } else {
+        byKey[key].hasSd = true;
+        byKey[key].sdPath = f.name;
+        byKey[key].size = f.size || 0;
+        if (f.date) byKey[key].date = f.date;
+      }
     });
-    combined = files;
   } catch (e) {}
 
   try {
     const cr = await fetch('http://10.25.7.171:8095/api/history');
     const cd = await cr.json();
     if (cd && Array.isArray(cd.history)) {
-      const seenCloud = new Set();
       cd.history.forEach(h => {
-        if (h.file && !seenCloud.has(h.file)) {
-          seenCloud.add(h.file);
-          combined.push({
-            name: h.file,
+        if (!h.file) return;
+        const info = extractDateAndTimeFromCamName(h.file, '', h.timestamp || '');
+        const key = info.fileKey;
+        const annUrl = 'http://10.25.7.171:8095/annotated/' + encodeURIComponent(key);
+        const rawUrl = 'http://10.25.7.171:8095/raw/' + encodeURIComponent(key);
+        if (!byKey[key]) {
+          byKey[key] = {
+            fileKey: key,
+            name: key,
+            sdPath: '',
+            date: info.date,
+            timeStr: info.timeStr,
             size: 0,
             type: 'cloud',
+            hasSd: false,
+            hasCloud: true,
             timestamp: h.timestamp || '',
             summary: h.summary || '',
-            annUrl: 'http://10.25.7.171:8095/annotated/' + encodeURIComponent(h.file),
-            rawUrl: 'http://10.25.7.171:8095/raw/' + encodeURIComponent(h.file)
-          });
+            annUrl: annUrl,
+            rawUrl: rawUrl
+          };
+        } else {
+          byKey[key].hasCloud = true;
+          byKey[key].timestamp = h.timestamp || '';
+          byKey[key].summary = h.summary || '';
+          byKey[key].annUrl = annUrl;
+          byKey[key].rawUrl = rawUrl;
         }
       });
     }
   } catch (e) {}
 
-  sdCacheFiles = combined;
+  const merged = Object.values(byKey).sort((a, b) => b.fileKey.localeCompare(a.fileKey));
+  sdCacheFiles = [...merged, ...dirs];
   renderSdGallery();
 }
 
 async function remountSdCard() {
-  showToast('🔌 Đang khởi tạo lại khe thẻ nhớ MicroSD (SDMMC 1-bit & SDSPI)...');
+  showToast('🔌 Đang khởi tạo lại khe thẻ nhớ MicroSD (SDMMC 1-bit)...');
   await fetch('/control?var=sd_remount&val=1');
   await updateStatus();
   await loadSdFiles();
@@ -1331,9 +1522,18 @@ async function pruneSdFiles() {
 }
 
 async function delSdFile(name) {
-  if (!confirm('Xóa file ' + name + '?')) return;
+  if (!confirm('Xóa ảnh /sdcard/' + name + ' trên thẻ nhớ?')) return;
   await fetch(`/delete?file=${encodeURIComponent(name)}`);
   showToast('🗑️ Đã xóa ' + name);
+  updateStatus();
+  loadSdFiles();
+}
+
+async function delSdDateFolder(dateStr, count) {
+  if (!confirm(`Xóa toàn bộ thư mục ngày /sdcard/${dateStr} (${count} ảnh) trên thẻ nhớ MicroSD?`)) return;
+  await fetch(`/delete?date=${encodeURIComponent(dateStr)}`);
+  showToast(`🗑️ Đã xóa thư mục ngày /sdcard/${dateStr}!`);
+  updateStatus();
   loadSdFiles();
 }
 
