@@ -24,6 +24,11 @@
 #include "esp_partition.h"
 #include "esp_task_wdt.h"
 #include "esp_rom_sys.h"
+#include "esp_rom_gpio.h"
+#include "soc/gpio_sig_map.h"
+#include "soc/gpio_reg.h"
+#include "soc/io_mux_reg.h"
+#include "soc/rtc_io_reg.h"
 #include "soc/soc.h"
 #include "soc/sens_reg.h"
 #include "soc/efuse_reg.h"
@@ -328,7 +333,10 @@ int app_cam_get_stream_clients(void) {
 
 void app_cam_set_stream_clients(int delta) {
     s_stream_clients += delta;
-    if (s_stream_clients < 0) s_stream_clients = 0;
+    if (s_stream_clients <= 0) {
+        s_stream_clients = 0;
+        app_cam_release_vcm_coil();
+    }
     app_cam_touch_activity();
 }
 
@@ -346,14 +354,39 @@ void app_notify_flow_activity(bool active) {
     }
 }
 
+int custom_ov5640_af_set_manual_position(sensor_t *sensor, uint16_t position);
+
+static uint16_t ov5640_read_vcm_position(sensor_t *s) {
+    if (!s || !s->get_reg) return g_cfg.af_manual_pos;
+    int r3603 = s->get_reg(s, 0x3603, 0xff);
+    int r3602 = s->get_reg(s, 0x3602, 0xff);
+    int r3028 = s->get_reg(s, 0x3028, 0xff);
+    uint16_t dac10 = 0;
+    if (r3603 >= 0 && r3602 >= 0) {
+        dac10 = (uint16_t)(((r3603 & 0x3F) << 4) | ((r3602 >> 4) & 0x0F));
+    }
+    if (dac10 == 0 && r3028 > 0) {
+        dac10 = (uint16_t)((r3028 * 849UL) / 255UL);
+    }
+    return (dac10 > 0 && dac10 <= 1023) ? dac10 : g_cfg.af_manual_pos;
+}
+
+void app_cam_release_vcm_coil(void) {
+    if (s_rescue_mode || s_cam_sleeping) return;
+    sensor_t *s = esp_camera_sensor_get();
+    if (s && s->set_reg) {
+        s->set_reg(s, 0x3602, 0xff, 0x00);
+        s->set_reg(s, 0x3603, 0xff, 0x00);
+        s->set_reg(s, 0x3022, 0xff, 0x08);
+    }
+}
+
 void app_cam_wake_if_sleeping(void) {
     app_cam_touch_activity();
     if (s_rescue_mode || !s_cam_sleeping) return;
     sensor_t *s = esp_camera_sensor_get();
     if (s && s->set_reg) {
         s->set_reg(s, 0x3008, 0x40, 0x00);
-        s->set_reg(s, 0x3017, 0xff, 0xff);
-        s->set_reg(s, 0x3018, 0xff, 0xff);
         s_cam_sleeping = false;
         ESP_LOGI(TAG, "OV5640 Woke up from Eco Standby, waiting 80ms for frame sync...");
         vTaskDelay(pdMS_TO_TICKS(80));
@@ -366,6 +399,8 @@ static void app_cam_enter_sleep(void) {
     if (s_rescue_mode || s_cam_sleeping || s_stream_clients > 0) return;
     sensor_t *s = esp_camera_sensor_get();
     if (s && s->set_reg) {
+        s->set_reg(s, 0x3602, 0xff, 0x00);
+        s->set_reg(s, 0x3603, 0xff, 0x00);
         s->set_reg(s, 0x3022, 0xff, 0x08);
         s->set_reg(s, 0x3008, 0x40, 0x40);
         s_cam_sleeping = true;
@@ -376,7 +411,8 @@ static void app_cam_enter_sleep(void) {
 int custom_ov5640_af_set_manual_position(sensor_t *sensor, uint16_t position) {
     if (!sensor || !sensor->set_reg) return -1;
     if (position > 1023) position = 1023;
-    sensor->set_reg(sensor, 0x3022, 0xff, 0x08);
+    // Pause continuous AF (0x06 = AF_PAUSE, NEVER 0x08 which releases VCM back to 0!)
+    sensor->set_reg(sensor, 0x3022, 0xff, 0x06);
     uint8_t reg_3602 = (uint8_t)(((position & 0x0F) << 4) | 0x04);
     uint8_t reg_3603 = (uint8_t)((position >> 4) & 0x3F);
     sensor->set_reg(sensor, 0x3602, 0xff, reg_3602);
@@ -385,78 +421,138 @@ int custom_ov5640_af_set_manual_position(sensor_t *sensor, uint16_t position) {
     return 0;
 }
 
+uint16_t app_cam_trigger_af_and_lock(void) {
+    if (s_rescue_mode) return g_cfg.af_manual_pos;
+    app_cam_wake_if_sleeping();
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s || !s->af_trigger) return g_cfg.af_manual_pos;
+
+    bool flash_assisted = app_flash_pre_capture_assist();
+    s->af_trigger(s);
+
+    // Poll 0x3029 (OV5640_CMD_FW_STATUS) up to 1500ms until 0x10 (FOCUSED)
+    uint8_t fw_st = 0;
+    bool focused = false;
+    for (int i = 0; i < 50; i++) {
+        vTaskDelay(pdMS_TO_TICKS(30));
+        int v = s->get_reg ? s->get_reg(s, 0x3029, 0xff) : -1;
+        if (v >= 0) {
+            fw_st = (uint8_t)v;
+            if (fw_st == 0x10) {
+                focused = true;
+                break;
+            }
+            if (i > 6 && fw_st == 0x70) {
+                break;
+            }
+        }
+    }
+
+    // Lock/Pause VCM at focused plane (0x06 = AF_PAUSE, NEVER 0x08 AF_RELEASE!)
+    if (s->set_reg) s->set_reg(s, 0x3022, 0xff, 0x06);
+    uint16_t locked_pos = ov5640_read_vcm_position(s);
+    if (locked_pos > 0) {
+        g_cfg.af_manual_pos = locked_pos;
+        g_cfg.af_mode = 1;
+        app_config_save();
+    }
+    if (s_stream_clients == 0) {
+        app_cam_release_vcm_coil();
+    }
+    app_flash_post_capture_restore(flash_assisted);
+    ESP_LOGI(TAG, "OV5640 Hardware AF Lock complete (focused=%d, status=0x%02X) -> Locked VCM=%u",
+             focused ? 1 : 0, fw_st, (unsigned)g_cfg.af_manual_pos);
+    return g_cfg.af_manual_pos;
+}
+
+static float measure_roi_sharpness_at_vcm(sensor_t *s, uint16_t pos) {
+    app_cam_touch_activity();
+    custom_ov5640_af_set_manual_position(s, pos);
+    vTaskDelay(pdMS_TO_TICKS(95));
+    // Flush stale DMA frame so we evaluate the frame at the new VCM position
+    camera_fb_t *stale = esp_camera_fb_get();
+    if (stale) esp_camera_fb_return(stale);
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) return -1.0f;
+    uint8_t *dummy_out = NULL;
+    size_t dummy_len = 0;
+    bool dummy_alloc = false;
+    bool old_osd = g_cfg.osd_enable;
+    g_cfg.osd_enable = false;
+    process_frame_osd_and_ai(fb->buf, fb->len, fb->width, fb->height, 80, NULL, &dummy_out, &dummy_len, &dummy_alloc);
+    g_cfg.osd_enable = old_osd;
+    if (dummy_alloc && dummy_out) free(dummy_out);
+    esp_camera_fb_return(fb);
+    return g_last_edge_ai.sharpness_score;
+}
+
 uint16_t app_cam_roi_focus_sweep(void) {
     if (s_rescue_mode) return g_cfg.af_manual_pos;
     app_cam_wake_if_sleeping();
     sensor_t *s = esp_camera_sensor_get();
     if (!s) return g_cfg.af_manual_pos;
 
+    // Turn on Flash Assist ONCE for the entire Hardware AF + Coarse/Fine Sweep
     bool flash_assisted = app_flash_pre_capture_assist();
-    const uint16_t coarse_steps[] = {380, 500, 620, 720, 800, 870, 940};
-    uint16_t best_pos = g_cfg.af_manual_pos;
+
+    // Step 1: Run OV5640 8051 Hardware Contrast-AF while illuminated
+    uint16_t hw_af_pos = g_cfg.af_manual_pos;
+    if (s->af_trigger) {
+        s->af_trigger(s);
+        for (int i = 0; i < 40; i++) {
+            vTaskDelay(pdMS_TO_TICKS(30));
+            int v = s->get_reg ? s->get_reg(s, 0x3029, 0xff) : -1;
+            if (v == 0x10 || (i > 6 && v == 0x70)) break;
+        }
+        if (s->set_reg) s->set_reg(s, 0x3022, 0xff, 0x06);
+        uint16_t locked = ov5640_read_vcm_position(s);
+        if (locked > 0) hw_af_pos = locked;
+    }
+
+    const uint16_t coarse_steps[] = {180, 260, 340, 420, 500, 580, 660, 740, 840, hw_af_pos};
+    uint16_t best_pos = hw_af_pos ? hw_af_pos : g_cfg.af_manual_pos;
     float best_sharp = -1.0f;
 
     for (size_t i = 0; i < sizeof(coarse_steps) / sizeof(coarse_steps[0]); i++) {
         uint16_t pos = coarse_steps[i];
-        custom_ov5640_af_set_manual_position(s, pos);
-        vTaskDelay(pdMS_TO_TICKS(110));
-        camera_fb_t *fb = esp_camera_fb_get();
-        if (fb) {
-            esp_camera_fb_return(fb); // flush old frame
-        }
-        fb = esp_camera_fb_get();
-        if (fb) {
-            uint8_t *dummy_out = NULL;
-            size_t dummy_len = 0;
-            bool dummy_alloc = false;
-            bool old_osd = g_cfg.osd_enable;
-            g_cfg.osd_enable = false;
-            process_frame_osd_and_ai(fb->buf, fb->len, fb->width, fb->height, 80, NULL, &dummy_out, &dummy_len, &dummy_alloc);
-            g_cfg.osd_enable = old_osd;
-            if (dummy_alloc && dummy_out) free(dummy_out);
-            esp_camera_fb_return(fb);
-            if (g_last_edge_ai.sharpness_score > best_sharp) {
-                best_sharp = g_last_edge_ai.sharpness_score;
-                best_pos = pos;
-            }
+        if (pos == 0 || pos > 1023) continue;
+        float sh = measure_roi_sharpness_at_vcm(s, pos);
+        ESP_LOGI(TAG, "AF Coarse Sweep VCM=%u -> Sharpness=%.2f", (unsigned)pos, sh);
+        if (sh > best_sharp) {
+            best_sharp = sh;
+            best_pos = pos;
         }
     }
 
-    // Fine sweep +/- 35 around best_pos
-    int fine_offsets[] = {-35, 35};
+    // Step 2: Fine sweep (-50, -25, +25, +50) around best_pos
+    const int fine_offsets[] = {-50, -25, 25, 50};
     uint16_t center_pos = best_pos;
-    for (int j = 0; j < 2; j++) {
+    for (int j = 0; j < 4; j++) {
         int cand = (int)center_pos + fine_offsets[j];
-        if (cand < 0) cand = 0;
-        if (cand > 1023) cand = 1023;
-        custom_ov5640_af_set_manual_position(s, (uint16_t)cand);
-        vTaskDelay(pdMS_TO_TICKS(90));
-        camera_fb_t *fb = esp_camera_fb_get();
-        if (fb) esp_camera_fb_return(fb);
-        fb = esp_camera_fb_get();
-        if (fb) {
-            uint8_t *dummy_out = NULL;
-            size_t dummy_len = 0;
-            bool dummy_alloc = false;
-            bool old_osd = g_cfg.osd_enable;
-            g_cfg.osd_enable = false;
-            process_frame_osd_and_ai(fb->buf, fb->len, fb->width, fb->height, 80, NULL, &dummy_out, &dummy_len, &dummy_alloc);
-            g_cfg.osd_enable = old_osd;
-            if (dummy_alloc && dummy_out) free(dummy_out);
-            esp_camera_fb_return(fb);
-            if (g_last_edge_ai.sharpness_score > best_sharp) {
-                best_sharp = g_last_edge_ai.sharpness_score;
-                best_pos = (uint16_t)cand;
-            }
+        if (cand < 40) cand = 40;
+        if (cand > 1000) cand = 1000;
+        float sh = measure_roi_sharpness_at_vcm(s, (uint16_t)cand);
+        ESP_LOGI(TAG, "AF Fine Sweep VCM=%d -> Sharpness=%.2f", cand, sh);
+        if (sh > best_sharp) {
+            best_sharp = sh;
+            best_pos = (uint16_t)cand;
         }
     }
 
-    custom_ov5640_af_set_manual_position(s, best_pos);
+    if (s_stream_clients > 0) {
+        custom_ov5640_af_set_manual_position(s, best_pos);
+    } else {
+        app_cam_release_vcm_coil();
+    }
+    if (best_sharp > 0.0f) {
+        g_last_edge_ai.sharpness_score = best_sharp;
+    }
     g_cfg.af_manual_pos = best_pos;
     g_cfg.af_mode = 1;
     app_flash_post_capture_restore(flash_assisted);
     app_config_save();
-    ESP_LOGI(TAG, "Smart ROI Focus Sweep locked optimal VCM=%u (Sharpness=%.2f)", best_pos, best_sharp);
+    ESP_LOGI(TAG, "Smart ROI Focus Sweep locked optimal VCM=%u (Sharpness=%.2f, HW_AF=%u)",
+             best_pos, best_sharp, hw_af_pos);
     return best_pos;
 }
 
@@ -767,25 +863,180 @@ bool app_check_ov5640_health(void) {
     return false;
 }
 
+static void init_camera(void);
+
 void app_recover_camera_hardware(void) {
     if (s_rescue_mode) return;
     s_cam_recovery_cnt++;
     ESP_LOGW(TAG, "=== INDUSTRIAL CAMERA HARDWARE RECOVERY #%u (PWDN Pulse + SCCB Re-init) ===", (unsigned)s_cam_recovery_cnt);
+    s_cam_sleeping = false;
+
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s) {
+        init_camera();
+        return;
+    }
+
     gpio_set_direction(PWDN_GPIO_NUM, GPIO_MODE_OUTPUT);
     gpio_set_level(PWDN_GPIO_NUM, 1);
     vTaskDelay(pdMS_TO_TICKS(60));
     gpio_set_level(PWDN_GPIO_NUM, 0);
     vTaskDelay(pdMS_TO_TICKS(60));
-    s_cam_sleeping = false;
 
-    sensor_t *s = esp_camera_sensor_get();
-    if (s) {
-        app_apply_cam_isp_profile(g_cfg.cam_isp_profile);
-        if (s->af_set_manual_position) {
-            s->af_set_manual_position(s, g_cfg.af_manual_pos);
+    app_apply_cam_isp_profile(g_cfg.cam_isp_profile);
+    app_cam_release_vcm_coil();
+    app_check_ov5640_health();
+}
+
+int g_last_sccb_probe_3c = -1;
+int g_last_sccb_pid_3c = -1;
+char g_cam_diag_str[160] = "ok";
+extern esp_err_t camera_enable_out_clock(const camera_config_t *config);
+extern void camera_disable_out_clock(void);
+
+static void run_cam_electrical_diagnostic(const camera_config_t *cfg, esp_err_t err10, esp_err_t err20) {
+    const int test_pins[] = {VSYNC_GPIO_NUM, PCLK_GPIO_NUM, HREF_GPIO_NUM, Y2_GPIO_NUM};
+    for (int i = 0; i < 4; i++) {
+        gpio_set_direction(test_pins[i], GPIO_MODE_INPUT);
+        gpio_pulldown_dis(test_pins[i]);
+        gpio_pullup_en(test_pins[i]);
+    }
+    // 1. Measure with LDO OFF (GPIO 32 = 1)
+    gpio_set_direction(PWDN_GPIO_NUM, GPIO_MODE_OUTPUT);
+    gpio_set_level(PWDN_GPIO_NUM, 1);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    int off_mask = (gpio_get_level(VSYNC_GPIO_NUM) << 3) |
+                   (gpio_get_level(PCLK_GPIO_NUM) << 2) |
+                   (gpio_get_level(HREF_GPIO_NUM) << 1) |
+                   gpio_get_level(Y2_GPIO_NUM);
+    gpio_reset_pin(SIOD_GPIO_NUM);
+    esp_rom_gpio_connect_out_signal(SIOD_GPIO_NUM, SIG_GPIO_OUT_IDX, false, false);
+    gpio_pullup_dis(SIOD_GPIO_NUM);
+    gpio_pulldown_en(SIOD_GPIO_NUM);
+    gpio_set_direction(SIOD_GPIO_NUM, GPIO_MODE_INPUT);
+    esp_rom_delay_us(20);
+    int sda_off = gpio_get_level(SIOD_GPIO_NUM); // input with pulldown when LDO OFF
+    gpio_set_direction(SIOD_GPIO_NUM, GPIO_MODE_INPUT_OUTPUT);
+    gpio_set_level(SIOD_GPIO_NUM, 0);
+    esp_rom_delay_us(20);
+    int scl_off = gpio_get_level(SIOD_GPIO_NUM); // driven LOW when LDO OFF
+
+    // 2. Measure with LDO ON (GPIO 32 = 0) and XCLK active
+    camera_enable_out_clock(cfg);
+    gpio_set_level(PWDN_GPIO_NUM, 0);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    int on_mask = (gpio_get_level(VSYNC_GPIO_NUM) << 3) |
+                  (gpio_get_level(PCLK_GPIO_NUM) << 2) |
+                  (gpio_get_level(HREF_GPIO_NUM) << 1) |
+                  gpio_get_level(Y2_GPIO_NUM);
+    // 3. Bit-bang open-drain I2C scan 0x08..0x77 while XCLK is running
+    gpio_reset_pin(SIOD_GPIO_NUM);
+    gpio_reset_pin(SIOC_GPIO_NUM);
+    esp_rom_gpio_connect_out_signal(SIOD_GPIO_NUM, SIG_GPIO_OUT_IDX, false, false);
+    esp_rom_gpio_connect_out_signal(SIOC_GPIO_NUM, SIG_GPIO_OUT_IDX, false, false);
+    gpio_pullup_en(SIOD_GPIO_NUM);
+    gpio_pullup_en(SIOC_GPIO_NUM);
+    gpio_set_direction(SIOD_GPIO_NUM, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_set_direction(SIOC_GPIO_NUM, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_set_level(SIOD_GPIO_NUM, 1);
+    gpio_set_level(SIOC_GPIO_NUM, 1);
+    esp_rom_delay_us(20);
+    int bb_sda_hi = gpio_get_level(SIOD_GPIO_NUM);
+    int bb_scl_hi = gpio_get_level(SIOC_GPIO_NUM);
+    gpio_set_drive_capability(SIOD_GPIO_NUM, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(SIOC_GPIO_NUM, GPIO_DRIVE_CAP_3);
+    gpio_set_level(SIOD_GPIO_NUM, 0);
+    gpio_set_level(SIOC_GPIO_NUM, 0);
+    esp_rom_delay_us(20);
+    int bb_sda_lo = (gpio_get_level(SIOD_GPIO_NUM) << 1) | gpio_get_level(SIOC_GPIO_NUM);
+    int en26 = (REG_READ(GPIO_ENABLE_REG) >> 26) & 1;
+    int out26 = (REG_READ(GPIO_OUT_REG) >> 26) & 1;
+    uint32_t f26 = REG_READ(GPIO_FUNC26_OUT_SEL_CFG_REG);
+    uint32_t p26 = REG_READ(GPIO_PIN26_REG);
+    uint32_t m26 = REG_READ(PERIPHS_IO_MUX_GPIO26_U);
+    uint32_t r26 = REG_READ(DR_REG_RTCIO_BASE + 0x88);
+    gpio_pullup_dis(SIOD_GPIO_NUM);
+    gpio_pulldown_en(SIOD_GPIO_NUM);
+    gpio_set_direction(SIOD_GPIO_NUM, GPIO_MODE_INPUT_OUTPUT);
+    gpio_set_level(SIOD_GPIO_NUM, 0);
+    esp_rom_delay_us(20);
+    int pp26_lo = gpio_get_level(SIOD_GPIO_NUM);
+    gpio_pullup_en(SIOD_GPIO_NUM);
+    gpio_pulldown_dis(SIOD_GPIO_NUM);
+    gpio_set_direction(SIOD_GPIO_NUM, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_set_level(SIOC_GPIO_NUM, 1);
+    esp_rom_delay_us(10);
+    gpio_set_level(SIOD_GPIO_NUM, 1);
+    esp_rom_delay_us(10);
+
+    int found_addr = 0;
+    for (int addr = 0x08; addr <= 0x77; addr++) {
+        // START
+        gpio_set_level(SIOD_GPIO_NUM, 1);
+        gpio_set_level(SIOC_GPIO_NUM, 1);
+        esp_rom_delay_us(8);
+        gpio_set_level(SIOD_GPIO_NUM, 0);
+        esp_rom_delay_us(8);
+        gpio_set_level(SIOC_GPIO_NUM, 0);
+        esp_rom_delay_us(8);
+        uint8_t byte = (uint8_t)(addr << 1);
+        for (int b = 7; b >= 0; b--) {
+            gpio_set_level(SIOD_GPIO_NUM, (byte >> b) & 1);
+            esp_rom_delay_us(8);
+            gpio_set_level(SIOC_GPIO_NUM, 1);
+            esp_rom_delay_us(8);
+            gpio_set_level(SIOC_GPIO_NUM, 0);
+            esp_rom_delay_us(4);
+        }
+        gpio_set_level(SIOD_GPIO_NUM, 1);
+        esp_rom_delay_us(8);
+        gpio_set_level(SIOC_GPIO_NUM, 1);
+        esp_rom_delay_us(8);
+        int ack = (gpio_get_level(SIOD_GPIO_NUM) == 0);
+        gpio_set_level(SIOC_GPIO_NUM, 0);
+        esp_rom_delay_us(8);
+        // STOP
+        gpio_set_level(SIOD_GPIO_NUM, 0);
+        esp_rom_delay_us(8);
+        gpio_set_level(SIOC_GPIO_NUM, 1);
+        esp_rom_delay_us(8);
+        gpio_set_level(SIOD_GPIO_NUM, 1);
+        esp_rom_delay_us(15);
+        if (ack) {
+            found_addr = addr;
+            break;
         }
     }
-    app_check_ov5640_health();
+
+    for (int i = 0; i < 4; i++) {
+        gpio_pullup_dis(test_pins[i]);
+    }
+    // Cut LDO power and XCLK immediately after test
+    camera_disable_out_clock();
+    gpio_set_level(PWDN_GPIO_NUM, 1);
+
+    snprintf(g_cam_diag_str, sizeof(g_cam_diag_str),
+             "p3c=0x%x,bb=0x%02x(%d%d%d,pp=%d,eo=%d/%d),f=%lx,p=%lx,m=%lx,r=%lx,dov=%x/%x,off=%d/%d",
+             (unsigned)g_last_sccb_probe_3c,
+             found_addr, bb_sda_hi, bb_scl_hi, bb_sda_lo, pp26_lo, en26, out26,
+             (unsigned long)f26, (unsigned long)p26, (unsigned long)m26, (unsigned long)r26,
+             off_mask, on_mask, sda_off, scl_off);
+    ESP_LOGW(TAG, "CAM_DIAG: %s", g_cam_diag_str);
+}
+
+static void release_all_camera_pad_holds(void) {
+    REG_WRITE(RTC_IO_DIG_PAD_HOLD_REG, 0);
+    CLEAR_PERI_REG_MASK(RTC_IO_PAD_DAC1_REG, RTC_IO_PDAC1_HOLD);
+    CLEAR_PERI_REG_MASK(RTC_IO_PAD_DAC2_REG, RTC_IO_PDAC2_HOLD);
+    const int cam_pins[] = {
+        PWDN_GPIO_NUM, XCLK_GPIO_NUM, SIOD_GPIO_NUM, SIOC_GPIO_NUM,
+        VSYNC_GPIO_NUM, HREF_GPIO_NUM, PCLK_GPIO_NUM,
+        Y2_GPIO_NUM, Y3_GPIO_NUM, Y4_GPIO_NUM, Y5_GPIO_NUM,
+        Y6_GPIO_NUM, Y7_GPIO_NUM, Y8_GPIO_NUM, Y9_GPIO_NUM
+    };
+    for (size_t i = 0; i < sizeof(cam_pins) / sizeof(cam_pins[0]); i++) {
+        gpio_hold_dis((gpio_num_t)cam_pins[i]);
+    }
 }
 
 static void init_camera(void) {
@@ -793,6 +1044,7 @@ static void init_camera(void) {
         ESP_LOGW(TAG, "Rescue Safe Mode active: Skipping Camera DMA initialization to guarantee OTA recovery!");
         return;
     }
+    release_all_camera_pad_holds();
     camera_config_t config = {
         .ledc_channel = LEDC_CHANNEL_0,
         .ledc_timer = LEDC_TIMER_0,
@@ -820,11 +1072,22 @@ static void init_camera(void) {
         .grab_mode = CAMERA_GRAB_WHEN_EMPTY
     };
 
-    esp_err_t err = esp_camera_init(&config);
+    esp_err_t err10 = esp_camera_init(&config);
+    esp_err_t err = err10;
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
+        ESP_LOGW(TAG, "Camera init at 10MHz returned 0x%x, retrying at 20MHz XCLK...", err);
+        config.xclk_freq_hz = 20000000;
+        err = esp_camera_init(&config);
+    }
+    if (err != ESP_OK) {
+        run_cam_electrical_diagnostic(&config, err10, err);
+        ESP_LOGE(TAG, "Camera init failed (0x%x) -> LDO power OFF (GPIO 32 = HIGH) to keep camera 100%% cool!", err);
+        s_cam_pid_hex = (uint16_t)err;
+        s_cam_i2c_ok = false;
+        s_cam_sleeping = true;
         return;
     }
+    snprintf(g_cam_diag_str, sizeof(g_cam_diag_str), "ok_xclk_%uMHz", (unsigned)(config.xclk_freq_hz / 1000000));
 
     sensor_t *s = esp_camera_sensor_get();
     if (s) {
@@ -838,10 +1101,8 @@ static void init_camera(void) {
                 extern int custom_ov5640_af_set_manual_position(sensor_t *sensor, uint16_t position);
                 s->af_set_manual_position = custom_ov5640_af_set_manual_position;
                 if (s->af_init(s, 2500) == 0) {
-                    ESP_LOGI(TAG, "OV5640 Autofocus MCU initialized successfully!");
-                    // Restore saved manual focus step immediately (low power, no boot-time VCM current spike!)
-                    uint16_t init_pos = g_cfg.af_manual_pos ? g_cfg.af_manual_pos : 380;
-                    custom_ov5640_af_set_manual_position(s, init_pos);
+                    ESP_LOGI(TAG, "OV5640 Autofocus MCU initialized successfully (Zero-Heat Pulse-and-Release VCM active)!");
+                    app_cam_release_vcm_coil();
                 } else {
                     ESP_LOGW(TAG, "OV5640 AF init returned warning");
                 }
@@ -903,9 +1164,9 @@ static void background_worker_task(void *arg) {
 
         if (s_rescue_mode) continue;
 
-        // Thermal Eco Protection: put OV5640 into Software Standby (<1mA) after 25s of idle
+        // Thermal Eco Protection: put OV5640 into Software Standby (<1mA, 0mA VCM) after 12s of idle
         if (g_cfg.eco_mode && !s_cam_sleeping && s_stream_clients == 0) {
-            if (tick_sec - s_last_cam_activity_sec >= 25) {
+            if (tick_sec - s_last_cam_activity_sec >= 12) {
                 app_cam_enter_sleep();
             }
         }

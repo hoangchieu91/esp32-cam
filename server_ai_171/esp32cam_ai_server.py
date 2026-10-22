@@ -2057,19 +2057,30 @@ async def api_ai_burst_check(
 
 @app.get("/api/ai/crop_display")
 async def api_ai_crop_display(
-    rx: int = 20,
-    ry: int = 25,
-    rw: int = 60,
-    rh: int = 45,
-    rot: int = 0,
-    enhance: int = 1
+    rx: int = 12,
+    ry: int = 8,
+    rw: int = 76,
+    rh: int = 84,
+    rot: int = -999,
+    enhance: int = 1,
+    live: int = 0
 ):
-    img = _fetch_esp32_snapshot(timeout=4.0)
+    img = None
+    if live:
+        img = _fetch_esp32_snapshot(timeout=4.0)
+        if img is not None and float(np.mean(img)) < 15.0:
+            img = None
     if img is None and history_list:
         last_fn = history_list[0].get("file", "")
         p = PROCESSED_DIR / last_fn
         if p.exists():
             img = cv2.imread(str(p))
+        if rot == -999:
+            rot = int(history_list[0].get("meter", {}).get("rot_deg", 0))
+    if img is None:
+        img = _fetch_esp32_snapshot(timeout=4.0)
+    if rot == -999:
+        rot = 0
 
     if img is None:
         return JSONResponse({"status": "error", "message": "No image available"}, status_code=503)

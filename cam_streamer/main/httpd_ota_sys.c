@@ -21,6 +21,7 @@ static const char *TAG = "httpd_ota_sys";
 // INDUSTRIAL DUAL-OTA HANDLERS (WEB UPLOAD, SERVER PULL, ROLLBACK RESCUE)
 // ============================================================================
 static void delayed_reboot_task(void *arg) {
+    app_cam_wake_if_sleeping();
     vTaskDelay(pdMS_TO_TICKS(800));
     esp_restart();
     vTaskDelete(NULL);

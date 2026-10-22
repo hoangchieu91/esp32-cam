@@ -59,6 +59,8 @@ void app_apply_cam_isp_profile(uint8_t profile);
 void app_apply_target_preset(const char *preset);
 bool app_check_ov5640_health(void);
 void app_recover_camera_hardware(void);
+void app_cam_release_vcm_coil(void);
+uint16_t app_cam_trigger_af_and_lock(void);
 uint16_t app_cam_roi_focus_sweep(void);
 
 // WiFi, OTA & System Health Helper callbacks defined in cam_streamer.c

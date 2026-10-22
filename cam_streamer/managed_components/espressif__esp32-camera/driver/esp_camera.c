@@ -182,6 +182,33 @@ static esp_err_t camera_probe(const camera_config_t *config, camera_model_t *out
         CAMERA_ENABLE_OUT_CLOCK(config);
     }
 
+    if (config->pin_pwdn >= 0) {
+        ESP_LOGD(TAG, "Resetting camera by power down line");
+        gpio_config_t conf = { 0 };
+        conf.pin_bit_mask = 1LL << config->pin_pwdn;
+        conf.mode = GPIO_MODE_OUTPUT;
+        gpio_config(&conf);
+
+        // Power-cycle camera LDO BEFORE SCCB_Init so SDA/SCL voltage ramp does not glitch I2C FSM
+        gpio_set_level(config->pin_pwdn, 1);
+        vTaskDelay(pdMS_TO_TICKS(60));
+        gpio_set_level(config->pin_pwdn, 0);
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+
+    if (config->pin_reset >= 0) {
+        ESP_LOGD(TAG, "Resetting camera");
+        gpio_config_t conf = { 0 };
+        conf.pin_bit_mask = 1LL << config->pin_reset;
+        conf.mode = GPIO_MODE_OUTPUT;
+        gpio_config(&conf);
+
+        gpio_set_level(config->pin_reset, 0);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        gpio_set_level(config->pin_reset, 1);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
     if (config->pin_sccb_sda != -1) {
         ESP_LOGD(TAG, "Initializing SCCB");
         ret = SCCB_Init(config->pin_sccb_sda, config->pin_sccb_scl);
@@ -195,46 +222,35 @@ static esp_err_t camera_probe(const camera_config_t *config, camera_model_t *out
         goto err;
     }
 
-    if (config->pin_pwdn >= 0) {
-        ESP_LOGD(TAG, "Resetting camera by power down line");
-        gpio_config_t conf = { 0 };
-        conf.pin_bit_mask = 1LL << config->pin_pwdn;
-        conf.mode = GPIO_MODE_OUTPUT;
-        gpio_config(&conf);
-
-        // careful, logic is inverted compared to reset pin
-        gpio_set_level(config->pin_pwdn, 1);
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-        gpio_set_level(config->pin_pwdn, 0);
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-    }
-
-    if (config->pin_reset >= 0) {
-        ESP_LOGD(TAG, "Resetting camera");
-        gpio_config_t conf = { 0 };
-        conf.pin_bit_mask = 1LL << config->pin_reset;
-        conf.mode = GPIO_MODE_OUTPUT;
-        gpio_config(&conf);
-
-        gpio_set_level(config->pin_reset, 0);
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-        gpio_set_level(config->pin_reset, 1);
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-    }
-
     ESP_LOGD(TAG, "Searching for camera address");
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    vTaskDelay(pdMS_TO_TICKS(20));
 
     int camera_model_id;
     uint8_t slv_addr = 0x0;
+    extern int g_last_sccb_probe_3c;
+    extern int g_last_sccb_pid_3c;
 
     /**
-     * This loop probes each known sensor until a supported camera is detected
+     * Probe OV5640 (0x3C) first so a NACK on 0x21/0x30 cannot wedge the ESP32 I2C FSM
      */
-    for(camera_model_id = 0; *out_camera_model == CAMERA_NONE && camera_model_id < CAMERA_MODEL_MAX ; camera_model_id++) {
+    const int probe_order[] = {
+        CAMERA_OV5640, CAMERA_OV2640, CAMERA_OV3660, CAMERA_OV7725
+    };
+    for(size_t idx = 0; *out_camera_model == CAMERA_NONE && idx < sizeof(probe_order)/sizeof(probe_order[0]); idx++) {
+        camera_model_id = probe_order[idx];
         slv_addr = camera_sensor[camera_model_id].sccb_addr;
 
-        if (ESP_OK != SCCB_Probe(slv_addr)) {
+        int pr = SCCB_Probe(slv_addr);
+        if (slv_addr == 0x3C) {
+            if (g_last_sccb_probe_3c == -1) g_last_sccb_probe_3c = pr;
+            if (pr == ESP_OK) {
+                g_last_sccb_probe_3c = pr;
+                uint8_t h = SCCB_Read16(0x3C, 0x300A);
+                uint8_t l = SCCB_Read16(0x3C, 0x300B);
+                g_last_sccb_pid_3c = ((int)h << 8) | l;
+            }
+        }
+        if (ESP_OK != pr) {
             continue;
         }
 

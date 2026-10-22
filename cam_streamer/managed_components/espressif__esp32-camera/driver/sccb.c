@@ -100,7 +100,7 @@ int SCCB_Probe(uint8_t slv_addr)
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, ( slv_addr << 1 ) | WRITE_BIT, ACK_CHECK_EN);
     i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(sccb_i2c_port, cmd, 1000 / portTICK_RATE_MS);
+    esp_err_t ret = i2c_master_cmd_begin(sccb_i2c_port, cmd, pdMS_TO_TICKS(50));
     i2c_cmd_link_delete(cmd);
     return ret;
 }

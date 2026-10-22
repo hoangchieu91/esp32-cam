@@ -35,7 +35,7 @@ static const char *TAG = "sccb-ng";
 #define portTICK_RATE_MS portTICK_PERIOD_MS
 #endif
 
-#define TIMEOUT_MS 1000                /*!< I2C timeout duration */
+#define TIMEOUT_MS 60                  /*!< I2C timeout duration */
 #define SCCB_FREQ CONFIG_SCCB_CLK_FREQ /*!< I2C master frequency */
 #if CONFIG_SCCB_HARDWARE_I2C_PORT1
 const int SCCB_I2C_PORT_DEFAULT = 1;
@@ -213,6 +213,7 @@ int SCCB_Probe(uint8_t slv_addr)
         return ret;
     }
 
+    i2c_master_bus_reset(bus_handle);
     ret = i2c_master_probe(bus_handle, slv_addr, TIMEOUT_MS);
 
     if (ret == ESP_OK)

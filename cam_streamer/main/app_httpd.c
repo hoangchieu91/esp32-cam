@@ -86,7 +86,25 @@ static esp_err_t execute_capture_pipeline(const char *mode, char *out_filename, 
     if (s_cam_mutex) xSemaphoreTake(s_cam_mutex, pdMS_TO_TICKS(3000));
     app_cam_wake_if_sleeping();
     bool flash_assisted = app_flash_pre_capture_assist();
+    sensor_t *s_cap = esp_camera_sensor_get();
+    if (s_cap) {
+        if (g_cfg.af_mode == 0) {
+            app_cam_trigger_af_and_lock();
+        } else if (s_cap->af_set_manual_position && g_cfg.af_manual_pos > 0) {
+            s_cap->af_set_manual_position(s_cap, g_cfg.af_manual_pos);
+            vTaskDelay(pdMS_TO_TICKS(110));
+        }
+    }
+    // Flush 2 stale DMA frames so the captured image is guaranteed post-focus & post-exposure
+    for (int f = 0; f < 2; f++) {
+        camera_fb_t *stale_fb = esp_camera_fb_get();
+        if (stale_fb) esp_camera_fb_return(stale_fb);
+    }
     camera_fb_t *fb = esp_camera_fb_get();
+    // Thermal Protection: Immediately de-energize VCM coil (0mA) and Flash LED right after shutter closes!
+    if (app_cam_get_stream_clients() == 0) {
+        app_cam_release_vcm_coil();
+    }
     if (!fb) {
         app_flash_post_capture_restore(flash_assisted);
         s_capture_err_cnt++;
@@ -285,18 +303,13 @@ static esp_err_t status_handler(httpd_req_t *req) {
 
     uint32_t uptime = (uint32_t)(esp_timer_get_time() / 1000000ULL);
 
-    app_sys_health_t h;
-    app_get_sys_health(&h);
+    app_sys_health_t *hp = (app_sys_health_t *)calloc(1, sizeof(app_sys_health_t));
+    if (!hp) return ESP_ERR_NO_MEM;
+    app_get_sys_health(hp);
+    #define h (*hp)
 
     sensor_t *s = esp_camera_sensor_get();
-    uint8_t af_raw = 0;
     bool af_focused = true, af_busy = false;
-    if (!app_cam_is_sleeping() && s && s->af_get_status) {
-        if (s_cam_mutex && xSemaphoreTake(s_cam_mutex, pdMS_TO_TICKS(15)) == pdTRUE) {
-            s->af_get_status(s, &af_raw, &af_focused, &af_busy);
-            xSemaphoreGive(s_cam_mutex);
-        }
-    }
 
     char time_str[32];
     net_get_time_str(time_str, sizeof(time_str));
@@ -394,8 +407,10 @@ static esp_err_t status_handler(httpd_req_t *req) {
     // Industrial Camera Bus, Stack Watermark, CoreDump & Pipeline SLA
     cJSON_AddNumberToObject(root, "min_stack_bytes", h.min_stack_bytes);
     cJSON_AddStringToObject(root, "min_stack_task", h.min_stack_task);
+    extern char g_cam_diag_str[160];
     cJSON_AddBoolToObject(root, "cam_i2c_ok", h.cam_i2c_ok);
     cJSON_AddNumberToObject(root, "cam_pid_hex", h.cam_pid_hex);
+    cJSON_AddStringToObject(root, "cam_diag", g_cam_diag_str);
     cJSON_AddNumberToObject(root, "cam_recovery_cnt", h.cam_recovery_cnt);
     cJSON_AddBoolToObject(root, "coredump_present", h.coredump_present);
     cJSON_AddNumberToObject(root, "cam_isp_profile", g_cfg.cam_isp_profile);
@@ -444,6 +459,8 @@ static esp_err_t status_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "gpio13_level", app_get_gpio13_sensor_level());
     cJSON_AddNumberToObject(root, "gpio13_pulses", app_get_gpio13_pulse_count());
 
+    #undef h
+    free(hp);
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     httpd_resp_set_type(req, "application/json");
@@ -848,10 +865,11 @@ static esp_err_t cmd_handler(httpd_req_t *req) {
                     if (s->af_set_manual_position) s->af_set_manual_position(s, (uint16_t)v);
                     app_config_save();
                 } else if (!strcmp(var, "af_trigger")) {
-                    if (s->af_trigger) s->af_trigger(s);
-                    vTaskDelay(pdMS_TO_TICKS(450));
-                    // Release VCM coil after single AF lock to keep lens cool
-                    if (s->set_reg) s->set_reg(s, 0x3022, 0xff, 0x08);
+                    uint16_t locked_vcm = app_cam_trigger_af_and_lock();
+                    char rbuf[96];
+                    snprintf(rbuf, sizeof(rbuf), "{\"status\":\"ok\",\"locked_vcm\":%u}", (unsigned)locked_vcm);
+                    httpd_resp_set_type(req, "application/json");
+                    return httpd_resp_send(req, rbuf, strlen(rbuf));
                 } else if (!strcmp(var, "af_roi_sweep")) {
                     uint16_t best_vcm = app_cam_roi_focus_sweep();
                     char rbuf[96];
@@ -1044,6 +1062,10 @@ static esp_err_t stream_handler(httpd_req_t *req) {
 
     app_cam_set_stream_clients(1);
     app_cam_wake_if_sleeping();
+    sensor_t *s_st = esp_camera_sensor_get();
+    if (s_st && s_st->af_set_manual_position && g_cfg.af_manual_pos > 0) {
+        s_st->af_set_manual_position(s_st, g_cfg.af_manual_pos);
+    }
 
     while (res == ESP_OK) {
         if (s_cam_mutex) xSemaphoreTake(s_cam_mutex, pdMS_TO_TICKS(1000));
@@ -1095,7 +1117,7 @@ void start_camera_server(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.ctrl_port = 32768;
-    config.stack_size = 8192;
+    config.stack_size = 12288;
     config.max_uri_handlers = 30;
     config.max_open_sockets = 7;
     config.lru_purge_enable = true;

@@ -86,10 +86,8 @@ esp_err_t ai_observe_handler(httpd_req_t *req) {
     // Optional Focus adjustment before observation
     if (strcmp(focus, "roi") == 0) {
         app_cam_roi_focus_sweep();
-    } else if (strcmp(focus, "af") == 0 && s && s->af_trigger) {
-        s->af_trigger(s);
-        vTaskDelay(pdMS_TO_TICKS(450));
-        if (s->set_reg) s->set_reg(s, 0x3022, 0xff, 0x08);
+    } else if (strcmp(focus, "af") == 0) {
+        app_cam_trigger_af_and_lock();
     } else if (focus[0] >= '0' && focus[0] <= '9') {
         int fpos = atoi(focus);
         if (fpos >= 0 && fpos <= 1023 && s && s->af_set_manual_position) {
@@ -106,12 +104,12 @@ esp_err_t ai_observe_handler(httpd_req_t *req) {
 
     char filename[64] = {0};
     char ftp_st[64] = {0};
-    esp_err_t err = app_execute_capture_pipeline(mode, filename, sizeof(filename), ftp_st, sizeof(ftp_st));
+    esp_err_t err = app_execute_capture_pipeline("ai_only", filename, sizeof(filename), ftp_st, sizeof(ftp_st));
     g_cfg.flash_mode = saved_fmode;
 
-    app_sys_health_t h;
-    app_get_sys_health(&h);
-    const char *ip_str = h.ip[0] ? h.ip : "10.25.7.100";
+    app_sys_health_t *hp = (app_sys_health_t *)calloc(1, sizeof(app_sys_health_t));
+    if (hp) app_get_sys_health(hp);
+    const char *ip_str = (hp && hp->ip[0]) ? hp->ip : "10.25.7.100";
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "status", (err == ESP_OK) ? "ok" : "error");
@@ -142,6 +140,7 @@ esp_err_t ai_observe_handler(httpd_req_t *req) {
         cJSON_AddStringToObject(root, "deep_vision_raw", g_last_server_ai_json);
     }
 
+    if (hp) free(hp);
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     httpd_resp_set_type(req, "application/json");
