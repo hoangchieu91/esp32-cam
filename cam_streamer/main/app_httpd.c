@@ -62,6 +62,21 @@ static uint32_t s_ftp_ok_cnt = 0;
 static uint32_t s_ftp_err_cnt = 0;
 static uint32_t s_fb_fail_streak = 0;
 
+// PSRAM Cache of Last Illuminated & Focused JPEG Frame (prevents black screen at night & keeps camera cool)
+static uint8_t *s_last_lit_jpg_buf = NULL;
+static size_t s_last_lit_jpg_len = 0;
+
+static void cache_lit_jpeg_in_psram(const uint8_t *buf, size_t len) {
+    if (!buf || len == 0 || len > 256 * 1024) return;
+    uint8_t *nb = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!nb) return;
+    memcpy(nb, buf, len);
+    uint8_t *old = s_last_lit_jpg_buf;
+    s_last_lit_jpg_buf = nb;
+    s_last_lit_jpg_len = len;
+    if (old) free(old);
+}
+
 void app_set_sd_mounted(bool mounted, uint64_t total_mb, uint64_t fat_total_mb, uint64_t free_mb, const char *card_name) {
     s_sd_mounted = mounted;
     s_sd_total_mb = total_mb;
@@ -134,12 +149,13 @@ static esp_err_t execute_capture_pipeline(const char *mode, char *out_filename, 
     }
     if (out_filename) snprintf(out_filename, fn_len, "%s", base_name);
 
-    // Keep clean un-drawn JPEG copy in PSRAM for AI Server analysis (free of OSD text/green ROI lines)
+    // Keep clean un-drawn JPEG copy in PSRAM for AI Server analysis & Night Viewport Cache
     size_t raw_len = fb->len;
     uint8_t *raw_buf = (uint8_t *)heap_caps_malloc(raw_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (raw_buf) {
         memcpy(raw_buf, fb->buf, raw_len);
     }
+    cache_lit_jpeg_in_psram(fb->buf, fb->len);
 
     // Burn OSD Timestamp & run Edge AI
     uint8_t *jpg_buf = NULL;
@@ -730,31 +746,73 @@ static esp_err_t capture_handler(httpd_req_t *req) {
 }
 
 // Instant Hardware-JPEG Snapshot (~35ms) for Web UI / 4G VPN / AI Server polling
+// Pass ?fresh=1 to pulse Flash Assist + VCM Focus for an on-demand night snapshot
 // Pass ?osd=1 if burned-in OSD is explicitly needed
 static esp_err_t snapshot_handler(httpd_req_t *req) {
     bool want_osd = false;
+    bool want_fresh = false;
     char query[64];
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         char val[16];
         if (httpd_query_key_value(query, "osd", val, sizeof(val)) == ESP_OK && atoi(val) == 1) {
             want_osd = true;
         }
-    }
-
-    if (s_cam_mutex) xSemaphoreTake(s_cam_mutex, pdMS_TO_TICKS(1500));
-    app_cam_wake_if_sleeping();
-    app_cam_touch_activity();
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-        if (s_cam_mutex) xSemaphoreGive(s_cam_mutex);
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
+        if (httpd_query_key_value(query, "fresh", val, sizeof(val)) == ESP_OK && atoi(val) == 1) {
+            want_fresh = true;
+        }
     }
 
     httpd_resp_set_type(req, "image/jpeg");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=snapshot.jpg");
+
+    // Serve PSRAM-cached illuminated & focused frame when idle/dark so night view never turns black and camera stays cool
+    if (!want_fresh && !want_osd && app_flash_get_duty() == 0 &&
+        s_last_lit_jpg_buf != NULL && s_last_lit_jpg_len > 0) {
+        return httpd_resp_send(req, (const char *)s_last_lit_jpg_buf, s_last_lit_jpg_len);
+    }
+
+    if (s_cam_mutex) xSemaphoreTake(s_cam_mutex, pdMS_TO_TICKS(2500));
+    app_cam_wake_if_sleeping();
+    app_cam_touch_activity();
+
+    bool do_assist = (want_fresh || s_last_lit_jpg_buf == NULL);
+    bool flash_assisted = false;
+    if (do_assist) {
+        flash_assisted = app_flash_pre_capture_assist();
+    }
+    sensor_t *s_snap = esp_camera_sensor_get();
+    if (s_snap && s_snap->af_set_manual_position && g_cfg.af_manual_pos > 0) {
+        if (do_assist || app_flash_get_duty() > 0) {
+            s_snap->af_set_manual_position(s_snap, g_cfg.af_manual_pos);
+            if (do_assist) {
+                vTaskDelay(pdMS_TO_TICKS(110));
+                for (int f = 0; f < 2; f++) {
+                    camera_fb_t *stale = esp_camera_fb_get();
+                    if (stale) esp_camera_fb_return(stale);
+                }
+            }
+        }
+    }
+
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (app_cam_get_stream_clients() == 0 && app_flash_get_duty() == 0) {
+        app_cam_release_vcm_coil();
+    }
+    if (do_assist) {
+        app_flash_post_capture_restore(flash_assisted);
+    }
+    if (!fb) {
+        if (s_cam_mutex) xSemaphoreGive(s_cam_mutex);
+        if (s_last_lit_jpg_buf && s_last_lit_jpg_len > 0) {
+            return httpd_resp_send(req, (const char *)s_last_lit_jpg_buf, s_last_lit_jpg_len);
+        }
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    cache_lit_jpeg_in_psram(fb->buf, fb->len);
 
     esp_err_t res = ESP_OK;
     if (want_osd) {
@@ -765,7 +823,6 @@ static esp_err_t snapshot_handler(httpd_req_t *req) {
         res = httpd_resp_send(req, (const char *)jpg_buf, jpg_len);
         if (allocated && jpg_buf) free(jpg_buf);
     } else {
-        // Direct zero-copy hardware JPEG from OV5640 DMA buffer (~35ms vs 2000ms)
         res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
     }
 
@@ -1067,6 +1124,14 @@ static esp_err_t stream_handler(httpd_req_t *req) {
         s_st->af_set_manual_position(s_st, g_cfg.af_manual_pos);
     }
 
+    // Smart Night Fill-Light during Live MJPEG stream (auto turns OFF when stream closes)
+    bool stream_auto_lit = false;
+    if (g_cfg.flash_mode >= 1 && app_flash_get_duty() == 0 && g_last_edge_ai.mean_luma < 32) {
+        uint8_t cap_duty = g_cfg.flash_cap_duty ? g_cfg.flash_cap_duty : 28;
+        app_flash_set_duty(cap_duty);
+        stream_auto_lit = true;
+    }
+
     while (res == ESP_OK) {
         if (s_cam_mutex) xSemaphoreTake(s_cam_mutex, pdMS_TO_TICKS(1000));
         app_cam_touch_activity();
@@ -1079,15 +1144,24 @@ static esp_err_t stream_handler(httpd_req_t *req) {
 
         // Run lightweight Edge AI motion check every 20 frames (~2.5 sec)
         frame_idx++;
-        if (g_cfg.edge_ai_enable && (frame_idx % 20 == 0) && fb->width <= 800) {
-            uint8_t *dummy_out = NULL;
-            size_t dummy_len = 0;
-            bool dummy_alloc = false;
-            bool old_osd = g_cfg.osd_enable;
-            g_cfg.osd_enable = false; // Only compute Edge AI metrics during stream
-            process_frame_osd_and_ai(fb->buf, fb->len, fb->width, fb->height, 80, NULL, &dummy_out, &dummy_len, &dummy_alloc);
-            g_cfg.osd_enable = old_osd;
-            if (dummy_alloc && dummy_out) free(dummy_out);
+        if (frame_idx == 2 || (frame_idx % 20 == 0)) {
+            cache_lit_jpeg_in_psram(fb->buf, fb->len);
+            if (g_cfg.edge_ai_enable && fb->width <= 800) {
+                uint8_t *dummy_out = NULL;
+                size_t dummy_len = 0;
+                bool dummy_alloc = false;
+                bool old_osd = g_cfg.osd_enable;
+                g_cfg.osd_enable = false; // Only compute Edge AI metrics during stream
+                process_frame_osd_and_ai(fb->buf, fb->len, fb->width, fb->height, 80, NULL, &dummy_out, &dummy_len, &dummy_alloc);
+                g_cfg.osd_enable = old_osd;
+                if (dummy_alloc && dummy_out) free(dummy_out);
+                // If scene turned dark while streaming in Smart Auto mode, enable soft fill-light
+                if (!stream_auto_lit && g_cfg.flash_mode >= 1 && app_flash_get_duty() == 0 && g_last_edge_ai.mean_luma < 22) {
+                    uint8_t cap_duty = g_cfg.flash_cap_duty ? g_cfg.flash_cap_duty : 28;
+                    app_flash_set_duty(cap_duty);
+                    stream_auto_lit = true;
+                }
+            }
         }
 
         size_t hlen = snprintf(part_buf, sizeof(part_buf), _STREAM_PART, (unsigned)fb->len);
@@ -1104,6 +1178,9 @@ static esp_err_t stream_handler(httpd_req_t *req) {
         fb = NULL;
         // Thermal Eco pacing: 85ms (~10-12 FPS) in Eco Mode vs 20ms in Turbo Mode
         vTaskDelay(pdMS_TO_TICKS(g_cfg.eco_mode ? 85 : 20));
+    }
+    if (stream_auto_lit && g_cfg.flash_duty == 0) {
+        app_flash_set_duty(0);
     }
     app_cam_set_stream_clients(-1);
     return res;

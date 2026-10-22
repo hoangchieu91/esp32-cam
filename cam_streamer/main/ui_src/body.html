@@ -48,13 +48,14 @@
         <div class="stream-card">
           <div class="stream-toolbar">
             <div class="seg-group" title="Chọn chế độ luồng hình ảnh (Tối ưu cho LAN hoặc 4G/WireGuard)">
-              <button class="seg-btn active" id="mode-btn-mjpeg" onclick="setStreamMode('mjpeg')">🎥 Live MJPEG</button>
-              <button class="seg-btn" id="mode-btn-snap" onclick="setStreamMode('snap')">📸 Ảnh Tĩnh 4G/VPN</button>
+              <button class="seg-btn" id="mode-btn-mjpeg" onclick="setStreamMode('mjpeg')">🎥 Live MJPEG</button>
+              <button class="seg-btn active" id="mode-btn-snap" onclick="setStreamMode('snap')">📸 Ảnh Tĩnh 4G/VPN</button>
               <button class="seg-btn" id="mode-btn-pause" onclick="setStreamMode('pause')">⏸️ Tạm Ngắt (Eco)</button>
             </div>
             <div class="seg-group">
+              <button class="seg-btn" id="btn-night-torch" onclick="toggleNightTorch()" title="Bật/Tắt đèn LED phụ chống lóa (11% PWM) để soi trực tiếp ban đêm (Tự tắt sau 45s khi đóng trang)">💡 Soi Đêm</button>
               <button class="seg-btn" id="btn-draw-roi" onclick="toggleInteractiveRoi()" title="Dùng ngón tay hoặc chuột kéo trực tiếp khung ROI trên video">✋ Kéo Vẽ ROI</button>
-              <button class="seg-btn" onclick="refreshSnapshotOnce()" title="Làm mới 1 khung hình">🔄</button>
+              <button class="seg-btn" onclick="refreshSnapshotOnce(true)" title="Nháy đèn trợ sáng 0.2s chụp ảnh mới nét căng (Không gây nóng)">📸 Chụp Xem</button>
               <button class="seg-btn" onclick="toggleFullscreenStream()" title="Phóng to toàn màn hình">⛶</button>
             </div>
           </div>

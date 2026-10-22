@@ -1,7 +1,8 @@
 let gConfig = null;
 let hmirrorVal = 0, vflipVal = 0;
 let currentTab = 'live';
-let streamMode = 'mjpeg'; // 'mjpeg' | 'snap' | 'pause'
+let streamMode = 'snap'; // 'mjpeg' | 'snap' | 'pause' (default 'snap' shows PSRAM-cached illuminated frame & keeps camera cool)
+let nightTorchOn = false;
 let snapTimer = null;
 let statusInFlight = false;
 let interactiveRoi = false;
@@ -91,10 +92,25 @@ function setStreamMode(mode) {
   showToast(labels[mode] || '');
 }
 
-function refreshSnapshotOnce() {
+function refreshSnapshotOnce(fresh = true) {
   const sImg = document.getElementById('stream-img');
-  sImg.src = '/snapshot?t=' + Date.now();
-  showToast('🔄 Đã làm mới khung hình!');
+  sImg.src = (fresh ? '/snapshot?fresh=1&t=' : '/snapshot?t=') + Date.now();
+  showToast(fresh ? '📸 Đã nháy đèn 0.2s & lấy nét chụp ảnh mới!' : '🔄 Đã cập nhật khung hình mới!');
+}
+
+async function toggleNightTorch() {
+  nightTorchOn = !nightTorchOn;
+  const duty = nightTorchOn ? (parseInt(document.getElementById('rng-flash-cap')?.value) || 28) : 0;
+  setFlashTorch(duty);
+  const btn = document.getElementById('btn-night-torch');
+  if (btn) {
+    btn.classList.toggle('draw-on', nightTorchOn);
+    btn.textContent = nightTorchOn ? '🔦 Đang Soi' : '💡 Soi Đêm';
+  }
+  if (streamMode === 'snap') {
+    setTimeout(() => refreshSnapshotOnce(false), 180);
+  }
+  showToast(nightTorchOn ? '🔦 Đã bật đèn soi đêm chống lóa (Tự động tắt sau 45s khi đóng trang)' : '🌑 Đã tắt đèn soi đêm (0V)');
 }
 
 function toggleFullscreenStream() {
@@ -659,6 +675,12 @@ async function updateStatus() {
       const fPct = Math.round(((d.flash_duty || 0) * 100) / 255);
       flSt.textContent = d.flash_duty > 0 ? `🔦 Đang sáng: ${fPct}%` : (d.flash_mode === 2 ? '⚡ Nháy khi chụp' : (d.flash_mode === 1 ? '🌙 Auto khi tối' : 'Tắt'));
     }
+    nightTorchOn = (d.flash_duty || 0) > 0;
+    const ntBtn = document.getElementById('btn-night-torch');
+    if (ntBtn) {
+      ntBtn.classList.toggle('draw-on', nightTorchOn);
+      ntBtn.textContent = nightTorchOn ? '🔦 Đang Soi' : '💡 Soi Đêm';
+    }
     const nextCapLbl = document.getElementById('lbl-next-cap');
     if (nextCapLbl) {
       if (d.auto_capture_sec >= 5) {
@@ -1062,7 +1084,7 @@ async function captureAll(mode) {
     const d = await r.json();
     if (d.status === 'ok') {
       showToast(`✅ Đã xử lý ${d.file} | FTP: ${d.ftp}`);
-      if (streamMode === 'snap') refreshSnapshotOnce();
+      if (streamMode === 'snap') refreshSnapshotOnce(false);
       updateStatus();
     } else {
       showToast('❌ Lỗi chụp ảnh');
