@@ -9,7 +9,7 @@
 
 static const char *TAG = "app_config";
 #define NVS_NAMESPACE     "cam_cfg"
-#define NVS_BLOB_KEY      "cfg_v8"
+#define NVS_BLOB_KEY      "cfg_v9"
 #define NVS_WG_VAULT_NS   "wg_vault"
 #define SD_WG_VAULT_PATH  "/sdcard/wg_vault.conf"
 
@@ -374,6 +374,14 @@ void app_config_reset_defaults(void) {
     strncpy(g_cfg.wg.endpoint_host, "nxchieu.duckdns.org", sizeof(g_cfg.wg.endpoint_host) - 1);
     g_cfg.wg.endpoint_port = 51820;
     g_cfg.wg.persistent_keepalive = 25;
+
+    // Baby Monitor & Govee BLE Room Environment Gateway defaults
+    g_cfg.baby_mon_enable = true;
+    g_cfg.baby_lock_flash = true; // Force GPIO 4 = LOW at night so newborn is never blinded
+    strncpy(g_cfg.baby_server_url, "http://10.25.7.116:8686/api/room-env", sizeof(g_cfg.baby_server_url) - 1);
+    strncpy(g_cfg.baby_sensor_name, "Govee Phòng Bé Bon", sizeof(g_cfg.baby_sensor_name) - 1);
+    strncpy(g_cfg.baby_source_device, "ESP32-CAM", sizeof(g_cfg.baby_source_device) - 1);
+    g_cfg.baby_target_mac[0] = '\0';
 }
 
 void app_config_factory_reset_preserve_vpn(void) {

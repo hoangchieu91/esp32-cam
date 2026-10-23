@@ -9,6 +9,7 @@
       </div>
     </div>
     <div class="badges">
+      <span id="baby-badge" class="badge ok" title="Nhiệt độ &amp; Độ ẩm Govee BLE Phòng Bé Bon">👶 Govee: Đang dò...</span>
       <span id="temp-badge" class="badge info">🌡️ --°C</span>
       <span id="volt-badge" class="badge ok">⚡ 3.30V</span>
       <span id="wifi-badge" class="badge ok">📶 -- dBm</span>
@@ -76,6 +77,40 @@
             <button class="btn btn-success" onclick="captureAll('meter_read')">🔍 Đọc Chỉ Số Ngay (AI .171)</button>
             <button class="btn btn-primary" onclick="captureAll('all')">📸 Chụp + Lưu SD + FTP</button>
             <button class="btn btn-accent" onclick="triggerAF()">🎯 Lấy Nét AF</button>
+          </div>
+        </div>
+
+        <!-- BABY MONITOR & GOVEE BLE LIVE ROOM ENVIRONMENT CARD -->
+        <div class="card" id="baby-live-card" style="border-color:rgba(16,185,129,0.38)">
+          <div class="card-title" style="flex-wrap:wrap;gap:6px">
+            <span>👶 Giám Sát Nhiệt Ẩm Phòng Bé Bon (Govee BLE NimBLE)</span>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <span class="badge ok" id="gv-coex-badge" style="font-size:10.5px">📡 BLE + Wi-Fi Coex</span>
+              <span class="badge info" id="gv-flash-lock-badge" style="font-size:10.5px">🌙 Flash GPIO4: Đã Khóa Tắt</span>
+              <button class="btn btn-sm btn-primary" onclick="forceBabyPostNow()" style="padding:2px 8px;font-size:10.5px">🚀 Đẩy Lên Server .116:8686</button>
+            </div>
+          </div>
+          <div class="meter-grid">
+            <div class="meter-box" style="border-color:rgba(56,189,248,0.35)">
+              <div class="meter-head"><span>🌡️ Nhiệt Độ Phòng</span><span class="badge info" id="gv-model-tag" style="font-size:9px;padding:1px 5px">Govee BLE</span></div>
+              <div class="digital-val" id="gv-temp-val" style="color:#38bdf8">--.- °C</div>
+              <div class="metric-sub" id="gv-mac-sub">MAC: --:--:--:--:--:--</div>
+            </div>
+            <div class="meter-box" style="border-color:rgba(16,185,129,0.35)">
+              <div class="meter-head"><span>💧 Độ Ẩm Không Khí</span><span class="badge ok" id="gv-rssi-tag" style="font-size:9px;padding:1px 5px">-- dBm</span></div>
+              <div class="digital-val" id="gv-hum-val" style="color:#34d399">--.- %</div>
+              <div class="metric-sub" id="gv-age-sub">Cập nhật: Đang dò sóng BLE...</div>
+            </div>
+            <div class="meter-box">
+              <div class="meter-head"><span>🔋 Pin Cảm Biến</span><span class="badge info" style="font-size:9px;padding:1px 5px">CR2477/AAA</span></div>
+              <div class="digital-val" id="gv-bat-val" style="color:#fbbf24">-- %</div>
+              <div class="metric-sub" id="gv-rx-sub">Gói BLE thu được: 0</div>
+            </div>
+            <div class="meter-box">
+              <div class="meter-head"><span>☁️ Đồng Bộ Server .116:8686</span><span class="badge ok" id="gv-http-tag" style="font-size:9px;padding:1px 5px">POST JSON</span></div>
+              <div class="digital-val" id="gv-cmd-val" style="font-size:17px;color:#a78bfa">IDLE</div>
+              <div class="metric-sub" id="gv-post-sub">OK: 0 | Lỗi: 0</div>
+            </div>
           </div>
         </div>
 
@@ -632,14 +667,58 @@
             <div class="ctrl-label"><span>Ntfy Topic URL</span></div>
             <input type="text" id="cfg-ntfy-url" value="http://10.25.7.116:8092/esp32cam">
           </div>
-          <div class="btn-row" style="margin-top:10px">
-            <button class="btn btn-primary" onclick="saveFullConfig()">💾 Lưu Cấu Hình Cloud &amp; AI</button>
-            <button class="btn" onclick="testNtfy()">🔔 Gửi Thử Ntfy</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+           <div class="btn-row" style="margin-top:10px">
+             <button class="btn btn-primary" onclick="saveFullConfig()">💾 Lưu Cấu Hình Cloud &amp; AI</button>
+             <button class="btn" onclick="testNtfy()">🔔 Gửi Thử Ntfy</button>
+           </div>
+         </div>
+       </div>
+     </div>
+
+     <!-- Baby Monitor & Govee BLE Gateway Configuration Card -->
+     <div class="card" style="border-color:rgba(16,185,129,0.35)">
+       <div class="card-title">
+         <span>👶 Cấu Hình Giám Sát Phòng Bé Bon (Govee BLE NimBLE ➔ Server 10.25.7.116:8686)</span>
+         <span class="badge ok">H5075 / H5101 / H5102 / H5100 / H5074 / H5179</span>
+       </div>
+       <div class="grid-2">
+         <div>
+           <div class="switch-row">
+             <span>Bật quét BLE Cảm biến Nhiệt Ẩm Govee (10s Quét / 50s Nghỉ chống xung đột Wi-Fi)</span>
+             <input type="checkbox" id="cfg-baby-en" checked>
+           </div>
+           <div class="switch-row" style="margin-top:6px">
+             <span>🌙 Khóa cứng Đèn Flash Trắng (GPIO 4 = LOW) bảo vệ mắt bé sơ sinh ban đêm</span>
+             <input type="checkbox" id="cfg-baby-lock-flash" checked>
+           </div>
+           <div class="form-grid" style="margin-top:8px">
+             <div class="ctrl-group">
+               <div class="ctrl-label"><span>Tên Cảm Biến (`sensor_name`)</span></div>
+               <input type="text" id="cfg-baby-name" value="Govee Phòng Bé Bon">
+             </div>
+             <div class="ctrl-group">
+               <div class="ctrl-label"><span>Thiết Bị Nguồn (`source_device`)</span></div>
+               <input type="text" id="cfg-baby-src" value="ESP32-CAM">
+             </div>
+           </div>
+         </div>
+         <div>
+           <div class="ctrl-group">
+             <div class="ctrl-label"><span>API Server Nhận Nhiệt Ẩm (`POST JSON`)</span></div>
+             <input type="text" id="cfg-baby-url" value="http://10.25.7.116:8686/api/room-env">
+           </div>
+           <div class="ctrl-group" style="margin-top:8px">
+             <div class="ctrl-label"><span>Lọc Địa Chỉ MAC Govee (Để trống = Tự nhận mọi cảm biến Govee hợp lệ)</span></div>
+             <input type="text" id="cfg-baby-mac" placeholder="VD: A4:C1:38:... (Tùy chọn)">
+           </div>
+           <div class="btn-row" style="margin-top:10px">
+             <button class="btn btn-success" onclick="saveFullConfig()">💾 Lưu Cấu Hình Phòng Bé</button>
+             <button class="btn btn-primary" onclick="forceBabyPostNow()">🚀 Đẩy Dữ Liệu Thử Ngay</button>
+           </div>
+         </div>
+       </div>
+     </div>
+   </div>
 
   <!-- ===================================================================== -->
   <!-- TAB 3: NETWORK, 5 WIFI PROFILES & WIREGUARD VPN                       -->

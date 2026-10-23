@@ -569,6 +569,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
       </div>
     </div>
     <div class="badges">
+      <span id="baby-badge" class="badge ok" title="Nhiệt độ &amp; Độ ẩm Govee BLE Phòng Bé Bon">👶 Govee: Đang dò...</span>
       <span id="temp-badge" class="badge info">🌡️ --°C</span>
       <span id="volt-badge" class="badge ok">⚡ 3.30V</span>
       <span id="wifi-badge" class="badge ok">📶 -- dBm</span>
@@ -636,6 +637,40 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
             <button class="btn btn-success" onclick="captureAll('meter_read')">🔍 Đọc Chỉ Số Ngay (AI .171)</button>
             <button class="btn btn-primary" onclick="captureAll('all')">📸 Chụp + Lưu SD + FTP</button>
             <button class="btn btn-accent" onclick="triggerAF()">🎯 Lấy Nét AF</button>
+          </div>
+        </div>
+
+        <!-- BABY MONITOR & GOVEE BLE LIVE ROOM ENVIRONMENT CARD -->
+        <div class="card" id="baby-live-card" style="border-color:rgba(16,185,129,0.38)">
+          <div class="card-title" style="flex-wrap:wrap;gap:6px">
+            <span>👶 Giám Sát Nhiệt Ẩm Phòng Bé Bon (Govee BLE NimBLE)</span>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <span class="badge ok" id="gv-coex-badge" style="font-size:10.5px">📡 BLE + Wi-Fi Coex</span>
+              <span class="badge info" id="gv-flash-lock-badge" style="font-size:10.5px">🌙 Flash GPIO4: Đã Khóa Tắt</span>
+              <button class="btn btn-sm btn-primary" onclick="forceBabyPostNow()" style="padding:2px 8px;font-size:10.5px">🚀 Đẩy Lên Server .116:8686</button>
+            </div>
+          </div>
+          <div class="meter-grid">
+            <div class="meter-box" style="border-color:rgba(56,189,248,0.35)">
+              <div class="meter-head"><span>🌡️ Nhiệt Độ Phòng</span><span class="badge info" id="gv-model-tag" style="font-size:9px;padding:1px 5px">Govee BLE</span></div>
+              <div class="digital-val" id="gv-temp-val" style="color:#38bdf8">--.- °C</div>
+              <div class="metric-sub" id="gv-mac-sub">MAC: --:--:--:--:--:--</div>
+            </div>
+            <div class="meter-box" style="border-color:rgba(16,185,129,0.35)">
+              <div class="meter-head"><span>💧 Độ Ẩm Không Khí</span><span class="badge ok" id="gv-rssi-tag" style="font-size:9px;padding:1px 5px">-- dBm</span></div>
+              <div class="digital-val" id="gv-hum-val" style="color:#34d399">--.- %</div>
+              <div class="metric-sub" id="gv-age-sub">Cập nhật: Đang dò sóng BLE...</div>
+            </div>
+            <div class="meter-box">
+              <div class="meter-head"><span>🔋 Pin Cảm Biến</span><span class="badge info" style="font-size:9px;padding:1px 5px">CR2477/AAA</span></div>
+              <div class="digital-val" id="gv-bat-val" style="color:#fbbf24">-- %</div>
+              <div class="metric-sub" id="gv-rx-sub">Gói BLE thu được: 0</div>
+            </div>
+            <div class="meter-box">
+              <div class="meter-head"><span>☁️ Đồng Bộ Server .116:8686</span><span class="badge ok" id="gv-http-tag" style="font-size:9px;padding:1px 5px">POST JSON</span></div>
+              <div class="digital-val" id="gv-cmd-val" style="font-size:17px;color:#a78bfa">IDLE</div>
+              <div class="metric-sub" id="gv-post-sub">OK: 0 | Lỗi: 0</div>
+            </div>
           </div>
         </div>
 
@@ -1192,14 +1227,58 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
             <div class="ctrl-label"><span>Ntfy Topic URL</span></div>
             <input type="text" id="cfg-ntfy-url" value="http://10.25.7.116:8092/esp32cam">
           </div>
-          <div class="btn-row" style="margin-top:10px">
-            <button class="btn btn-primary" onclick="saveFullConfig()">💾 Lưu Cấu Hình Cloud &amp; AI</button>
-            <button class="btn" onclick="testNtfy()">🔔 Gửi Thử Ntfy</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+           <div class="btn-row" style="margin-top:10px">
+             <button class="btn btn-primary" onclick="saveFullConfig()">💾 Lưu Cấu Hình Cloud &amp; AI</button>
+             <button class="btn" onclick="testNtfy()">🔔 Gửi Thử Ntfy</button>
+           </div>
+         </div>
+       </div>
+     </div>
+
+     <!-- Baby Monitor & Govee BLE Gateway Configuration Card -->
+     <div class="card" style="border-color:rgba(16,185,129,0.35)">
+       <div class="card-title">
+         <span>👶 Cấu Hình Giám Sát Phòng Bé Bon (Govee BLE NimBLE ➔ Server 10.25.7.116:8686)</span>
+         <span class="badge ok">H5075 / H5101 / H5102 / H5100 / H5074 / H5179</span>
+       </div>
+       <div class="grid-2">
+         <div>
+           <div class="switch-row">
+             <span>Bật quét BLE Cảm biến Nhiệt Ẩm Govee (10s Quét / 50s Nghỉ chống xung đột Wi-Fi)</span>
+             <input type="checkbox" id="cfg-baby-en" checked>
+           </div>
+           <div class="switch-row" style="margin-top:6px">
+             <span>🌙 Khóa cứng Đèn Flash Trắng (GPIO 4 = LOW) bảo vệ mắt bé sơ sinh ban đêm</span>
+             <input type="checkbox" id="cfg-baby-lock-flash" checked>
+           </div>
+           <div class="form-grid" style="margin-top:8px">
+             <div class="ctrl-group">
+               <div class="ctrl-label"><span>Tên Cảm Biến (`sensor_name`)</span></div>
+               <input type="text" id="cfg-baby-name" value="Govee Phòng Bé Bon">
+             </div>
+             <div class="ctrl-group">
+               <div class="ctrl-label"><span>Thiết Bị Nguồn (`source_device`)</span></div>
+               <input type="text" id="cfg-baby-src" value="ESP32-CAM">
+             </div>
+           </div>
+         </div>
+         <div>
+           <div class="ctrl-group">
+             <div class="ctrl-label"><span>API Server Nhận Nhiệt Ẩm (`POST JSON`)</span></div>
+             <input type="text" id="cfg-baby-url" value="http://10.25.7.116:8686/api/room-env">
+           </div>
+           <div class="ctrl-group" style="margin-top:8px">
+             <div class="ctrl-label"><span>Lọc Địa Chỉ MAC Govee (Để trống = Tự nhận mọi cảm biến Govee hợp lệ)</span></div>
+             <input type="text" id="cfg-baby-mac" placeholder="VD: A4:C1:38:... (Tùy chọn)">
+           </div>
+           <div class="btn-row" style="margin-top:10px">
+             <button class="btn btn-success" onclick="saveFullConfig()">💾 Lưu Cấu Hình Phòng Bé</button>
+             <button class="btn btn-primary" onclick="forceBabyPostNow()">🚀 Đẩy Dữ Liệu Thử Ngay</button>
+           </div>
+         </div>
+       </div>
+     </div>
+   </div>
 
   <!-- ===================================================================== -->
   <!-- TAB 3: NETWORK, 5 WIFI PROFILES & WIREGUARD VPN                       -->
@@ -2704,6 +2783,19 @@ async function loadConfig() {
     hmirrorVal = c.cam_hmirror || 0;
     vflipVal = c.cam_vflip || 0;
 
+    const babyEn = document.getElementById('cfg-baby-en');
+    if (babyEn) babyEn.checked = c.baby_mon_enable !== undefined ? !!c.baby_mon_enable : true;
+    const babyLock = document.getElementById('cfg-baby-lock-flash');
+    if (babyLock) babyLock.checked = c.baby_lock_flash !== undefined ? !!c.baby_lock_flash : true;
+    const babyUrl = document.getElementById('cfg-baby-url');
+    if (babyUrl && c.baby_server_url) babyUrl.value = c.baby_server_url;
+    const babyName = document.getElementById('cfg-baby-name');
+    if (babyName && c.baby_sensor_name) babyName.value = c.baby_sensor_name;
+    const babySrc = document.getElementById('cfg-baby-src');
+    if (babySrc && c.baby_source_device) babySrc.value = c.baby_source_device;
+    const babyMac = document.getElementById('cfg-baby-mac');
+    if (babyMac && c.baby_target_mac !== undefined) babyMac.value = c.baby_target_mac;
+
     renderWifiSlots(c.wifi_list, c.active_wifi_slot);
   } catch (e) { console.error(e); }
 }
@@ -2761,6 +2853,12 @@ async function saveFullConfig() {
     roi_w_pct: parseInt(document.getElementById('rng-rw').value) || 60,
     roi_h_pct: parseInt(document.getElementById('rng-rh').value) || 45,
     roi_draw_osd: document.getElementById('cfg-roi-osd').checked ? 1 : 0,
+    baby_mon_enable: document.getElementById('cfg-baby-en') ? (document.getElementById('cfg-baby-en').checked ? 1 : 0) : 1,
+    baby_lock_flash: document.getElementById('cfg-baby-lock-flash') ? (document.getElementById('cfg-baby-lock-flash').checked ? 1 : 0) : 1,
+    baby_server_url: (document.getElementById('cfg-baby-url')?.value || 'http://10.25.7.116:8686/api/room-env').trim(),
+    baby_sensor_name: (document.getElementById('cfg-baby-name')?.value || 'Govee Phòng Bé Bon').trim(),
+    baby_source_device: (document.getElementById('cfg-baby-src')?.value || 'ESP32-CAM').trim(),
+    baby_target_mac: (document.getElementById('cfg-baby-mac')?.value || '').trim(),
     wifi_list: wifi_list
   };
   const r = await fetch('/api/config', {
@@ -2847,6 +2945,52 @@ async function updateStatus() {
     const sb = document.getElementById('sd-badge');
     sb.textContent = d.sd_mounted ? `💾 SD: ${(d.sd_free_mb/1024).toFixed(1)}GB` : '☁️ SD Lỏng (Lưu .171)';
     sb.className = 'badge ' + (d.sd_mounted ? 'ok' : 'warn');
+
+    // Baby Monitor & Govee BLE Live Telemetry
+    const bb = document.getElementById('baby-badge');
+    if (bb) {
+      if (d.govee_valid) {
+        bb.textContent = `👶 ${(d.govee_temp_c||0).toFixed(1)}°C | ${(d.govee_humidity_pct||0).toFixed(1)}% | 🔋${d.govee_battery_pct||0}%`;
+        bb.className = 'badge ok';
+      } else {
+        bb.textContent = d.govee_ble_scanning ? `👶 BLE: Đang dò (${d.govee_cycle_sec||0}/10s)...` : `👶 BLE: Chờ cảm biến (${d.govee_cycle_sec||0}/60s)`;
+        bb.className = 'badge info';
+      }
+    }
+    const gvCoex = document.getElementById('gv-coex-badge');
+    if (gvCoex) {
+      gvCoex.textContent = d.govee_ble_scanning
+        ? `📡 Đang quét BLE (${d.govee_cycle_sec||0}/10s)`
+        : `📶 Nghỉ BLE / Ưu tiên Wi-Fi (${d.govee_cycle_sec||0}/60s)`;
+      gvCoex.className = 'badge ' + (d.govee_ble_scanning ? 'warn' : 'ok');
+    }
+    const gvFlLock = document.getElementById('gv-flash-lock-badge');
+    if (gvFlLock) {
+      gvFlLock.textContent = d.baby_lock_flash ? '🌙 Flash GPIO4: Đã Khóa Tắt' : '🔦 Flash GPIO4: Cho phép';
+      gvFlLock.className = 'badge ' + (d.baby_lock_flash ? 'info' : 'warn');
+    }
+    if (d.govee_valid) {
+      const elT = document.getElementById('gv-temp-val');
+      if (elT) elT.textContent = `${(d.govee_temp_c||0).toFixed(1)} °C`;
+      const elH = document.getElementById('gv-hum-val');
+      if (elH) elH.textContent = `${(d.govee_humidity_pct||0).toFixed(1)} %`;
+      const elB = document.getElementById('gv-bat-val');
+      if (elB) elB.textContent = `${d.govee_battery_pct||0} %`;
+      const elMod = document.getElementById('gv-model-tag');
+      if (elMod) elMod.textContent = d.govee_model || 'Govee BLE';
+      const elMac = document.getElementById('gv-mac-sub');
+      if (elMac) elMac.textContent = `MAC: ${d.govee_mac} ${d.govee_name ? '(' + d.govee_name + ')' : ''}`;
+      const elRssi = document.getElementById('gv-rssi-tag');
+      if (elRssi) elRssi.textContent = `${d.govee_rssi || -70} dBm`;
+      const elAge = document.getElementById('gv-age-sub');
+      if (elAge) elAge.textContent = `Cập nhật: ${d.govee_age_sec || 0}s trước (Δ≥0.3°C tự đẩy ngay)`;
+      const elRx = document.getElementById('gv-rx-sub');
+      if (elRx) elRx.textContent = `Gói BLE hợp lệ: ${d.govee_rx_cnt || 0}`;
+    }
+    const elCmd = document.getElementById('gv-cmd-val');
+    if (elCmd) elCmd.textContent = d.govee_auto_cmd ? `❄️ ${d.govee_auto_cmd}` : (d.govee_post_status || 'IDLE');
+    const elPostSub = document.getElementById('gv-post-sub');
+    if (elPostSub) elPostSub.textContent = `POST .116:8686 OK: ${d.govee_post_ok || 0} | Lỗi: ${d.govee_post_err || 0}`;
 
     // Live Stream HUD & Edge LED Indicator + Flash & Countdown
     document.getElementById('hud-ai').textContent = `Motion: ${(d.edge_motion || 0).toFixed(1)}%`;
@@ -3382,6 +3526,13 @@ async function testNtfy() {
   showToast('🔔 Đang gửi thông báo thử...');
   await fetch('/control?var=test_ntfy&val=1');
   showToast('✅ Đã gửi thông báo Ntfy!');
+}
+
+async function forceBabyPostNow() {
+  showToast('🚀 Đang dừng quét BLE & đẩy dữ liệu nhiệt ẩm phòng bé lên 10.25.7.116:8686...');
+  await fetch('/control?var=baby_post_now&val=1');
+  setTimeout(updateStatus, 800);
+  showToast('✅ Đã thực hiện lệnh đẩy dữ liệu phòng bé!');
 }
 
 async function scanWifi() {

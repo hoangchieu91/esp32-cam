@@ -1,5 +1,6 @@
 #include "osd_stamp.h"
 #include "app_config.h"
+#include "ble_govee.h"
 #include "img_converters.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -831,9 +832,14 @@ bool process_frame_osd_and_ai(
         strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &timeinfo);
 
         char banner_text[96];
+        govee_env_state_t gv;
+        app_ble_govee_get_state(&gv);
         if (extra_tag && extra_tag[0]) {
             snprintf(banner_text, sizeof(banner_text), "%s  %s  %s",
                      time_str, g_cfg.mdns_host, extra_tag);
+        } else if (g_cfg.baby_mon_enable && gv.valid) {
+            snprintf(banner_text, sizeof(banner_text), "%s  %.1fC %.1f%% BAT:%u%%",
+                     time_str, gv.temp_c, gv.humidity_pct, (unsigned)gv.battery_pct);
         } else if (g_cfg.edge_ai_enable) {
             snprintf(banner_text, sizeof(banner_text), "%s  %s  LED:%s",
                      time_str, g_cfg.mdns_host, g_last_edge_ai.edge_led_state);

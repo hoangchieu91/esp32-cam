@@ -4,6 +4,7 @@
 #include "app_config.h"
 #include "osd_stamp.h"
 #include "net_services.h"
+#include "ble_govee.h"
 #include "web_ui.h"
 
 #include "esp_http_server.h"
@@ -492,6 +493,34 @@ static esp_err_t status_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "gpio13_level", app_get_gpio13_sensor_level());
     cJSON_AddNumberToObject(root, "gpio13_pulses", app_get_gpio13_pulse_count());
 
+    // Baby Monitor & Govee BLE Room Environment Gateway
+    govee_env_state_t gv;
+    app_ble_govee_get_state(&gv);
+    cJSON_AddBoolToObject(root, "baby_mon_enable", g_cfg.baby_mon_enable);
+    cJSON_AddBoolToObject(root, "baby_lock_flash", g_cfg.baby_lock_flash);
+    cJSON_AddStringToObject(root, "baby_server_url", g_cfg.baby_server_url);
+    cJSON_AddStringToObject(root, "baby_sensor_name", g_cfg.baby_sensor_name);
+    cJSON_AddStringToObject(root, "baby_source_device", g_cfg.baby_source_device);
+    cJSON_AddStringToObject(root, "baby_target_mac", g_cfg.baby_target_mac);
+    cJSON_AddBoolToObject(root, "govee_valid", gv.valid);
+    cJSON_AddStringToObject(root, "govee_mac", gv.mac_str);
+    cJSON_AddStringToObject(root, "govee_model", gv.model_str);
+    cJSON_AddStringToObject(root, "govee_name", gv.ble_name);
+    cJSON_AddNumberToObject(root, "govee_temp_c", ((int)(gv.temp_c * 10.0f + (gv.temp_c >= 0 ? 0.5f : -0.5f))) / 10.0);
+    cJSON_AddNumberToObject(root, "govee_humidity_pct", ((int)(gv.humidity_pct * 10.0f + 0.5f)) / 10.0);
+    cJSON_AddNumberToObject(root, "govee_battery_pct", gv.battery_pct);
+    cJSON_AddNumberToObject(root, "govee_rssi", gv.rssi);
+    uint32_t gv_age = (gv.valid && uptime >= gv.last_seen_uptime_sec) ? (uptime - gv.last_seen_uptime_sec) : 0;
+    cJSON_AddNumberToObject(root, "govee_age_sec", gv_age);
+    cJSON_AddNumberToObject(root, "govee_rx_cnt", gv.rx_packet_cnt);
+    cJSON_AddBoolToObject(root, "govee_ble_scanning", gv.ble_scanning);
+    cJSON_AddNumberToObject(root, "govee_cycle_sec", gv.cycle_sec);
+    cJSON_AddNumberToObject(root, "govee_post_ok", gv.post_ok_cnt);
+    cJSON_AddNumberToObject(root, "govee_post_err", gv.post_err_cnt);
+    cJSON_AddNumberToObject(root, "govee_last_http", gv.last_http_code);
+    cJSON_AddStringToObject(root, "govee_auto_cmd", gv.last_auto_cmd);
+    cJSON_AddStringToObject(root, "govee_post_status", gv.last_post_status);
+
     #undef h
     free(hp);
     char *out = cJSON_PrintUnformatted(root);
@@ -572,6 +601,13 @@ static esp_err_t config_get_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "flash_mode", g_cfg.flash_mode);
     cJSON_AddNumberToObject(root, "flash_cap_duty", g_cfg.flash_cap_duty);
     cJSON_AddNumberToObject(root, "flash_warmup_ms", g_cfg.flash_warmup_ms);
+
+    cJSON_AddBoolToObject(root, "baby_mon_enable", g_cfg.baby_mon_enable);
+    cJSON_AddBoolToObject(root, "baby_lock_flash", g_cfg.baby_lock_flash);
+    cJSON_AddStringToObject(root, "baby_server_url", g_cfg.baby_server_url);
+    cJSON_AddStringToObject(root, "baby_sensor_name", g_cfg.baby_sensor_name);
+    cJSON_AddStringToObject(root, "baby_source_device", g_cfg.baby_source_device);
+    cJSON_AddStringToObject(root, "baby_target_mac", g_cfg.baby_target_mac);
 
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -669,6 +705,16 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     JSON_INT_SET(root, "flash_mode", g_cfg.flash_mode);
     JSON_INT_SET(root, "flash_cap_duty", g_cfg.flash_cap_duty);
     JSON_INT_SET(root, "flash_warmup_ms", g_cfg.flash_warmup_ms);
+
+    JSON_INT_SET(root, "baby_mon_enable", g_cfg.baby_mon_enable);
+    JSON_INT_SET(root, "baby_lock_flash", g_cfg.baby_lock_flash);
+    JSON_STR_COPY(root, "baby_server_url", g_cfg.baby_server_url);
+    JSON_STR_COPY(root, "baby_sensor_name", g_cfg.baby_sensor_name);
+    JSON_STR_COPY(root, "baby_source_device", g_cfg.baby_source_device);
+    JSON_STR_COPY(root, "baby_target_mac", g_cfg.baby_target_mac);
+    if (g_cfg.baby_lock_flash) {
+        app_flash_set_duty(0);
+    }
 
     cJSON *wlist = cJSON_GetObjectItem(root, "wifi_list");
     if (cJSON_IsArray(wlist)) {
@@ -1279,6 +1325,15 @@ static esp_err_t cmd_handler(httpd_req_t *req) {
                 app_set_gpio12_relay(v != 0);
             } else if (!strcmp(var, "gpio13_reset")) {
                 app_reset_gpio13_pulses();
+            } else if (!strcmp(var, "baby_mon_enable")) {
+                g_cfg.baby_mon_enable = (v != 0);
+                app_config_save();
+            } else if (!strcmp(var, "baby_lock_flash")) {
+                g_cfg.baby_lock_flash = (v != 0);
+                if (g_cfg.baby_lock_flash) app_flash_set_duty(0);
+                app_config_save();
+            } else if (!strcmp(var, "baby_post_now")) {
+                app_ble_govee_force_post_now();
             }
         }
     }

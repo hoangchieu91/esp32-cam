@@ -29,6 +29,7 @@
 #include "soc/gpio_reg.h"
 #include "soc/io_mux_reg.h"
 #include "soc/rtc_io_reg.h"
+#include "soc/rtc_cntl_reg.h"
 #include "soc/soc.h"
 #include "soc/sens_reg.h"
 #include "soc/efuse_reg.h"
@@ -46,6 +47,7 @@
 #include "hw_peripherals.h"
 #include "net_services.h"
 #include "osd_stamp.h"
+#include "ble_govee.h"
 
 static const char *TAG = "cam_streamer";
 
@@ -1269,6 +1271,16 @@ static void background_worker_task(void *arg) {
 }
 
 void app_main(void) {
+    // 0. Baby Monitor Hardware Protection:
+    //    - Immediately clamp White Flash LED (GPIO 4 = LOW) on boot so newborn is never blinded
+    //    - Disable false brownout reset during simultaneous Wi-Fi + BLE RF peaks
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+    gpio_reset_pin((gpio_num_t)4);
+    gpio_pullup_dis((gpio_num_t)4);
+    gpio_pulldown_en((gpio_num_t)4);
+    gpio_set_direction((gpio_num_t)4, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)4, 0);
+
     // 1. Check RTC Crash-Loop & Rescue Mode State
     esp_reset_reason_t reason = esp_reset_reason();
     if (s_rtc_magic != RTC_RESCUE_MAGIC) {
@@ -1308,6 +1320,7 @@ void app_main(void) {
     init_camera();
     vTaskDelay(pdMS_TO_TICKS(150));
     wifi_init_multi();
+    app_ble_govee_init(s_rescue_mode);
 
     xTaskCreatePinnedToCore(background_worker_task, "bg_worker", 6144, NULL, 4, NULL, 1);
 }

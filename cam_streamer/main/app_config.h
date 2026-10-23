@@ -109,6 +109,14 @@ typedef struct {
 
     // Industrial WireGuard VPN Tunnel
     app_wg_config_t wg;
+
+    // Baby Monitor & Govee BLE Room Environment Gateway
+    bool baby_mon_enable;          // Enable Govee BLE scanner & HTTP POST to Central Server
+    bool baby_lock_flash;          // Lock GPIO 4 White Flash = LOW (0V) to protect baby's eyes at night
+    char baby_server_url[96];      // Default: "http://10.25.7.116:8686/api/room-env"
+    char baby_sensor_name[48];     // Default: "Govee Phòng Bé Bon"
+    char baby_source_device[32];   // Default: "ESP32-CAM"
+    char baby_target_mac[20];      // Optional MAC filter (empty = any Govee BLE sensor)
 } app_config_t;
 
 extern app_config_t g_cfg;

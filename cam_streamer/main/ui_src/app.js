@@ -791,6 +791,19 @@ async function loadConfig() {
     hmirrorVal = c.cam_hmirror || 0;
     vflipVal = c.cam_vflip || 0;
 
+    const babyEn = document.getElementById('cfg-baby-en');
+    if (babyEn) babyEn.checked = c.baby_mon_enable !== undefined ? !!c.baby_mon_enable : true;
+    const babyLock = document.getElementById('cfg-baby-lock-flash');
+    if (babyLock) babyLock.checked = c.baby_lock_flash !== undefined ? !!c.baby_lock_flash : true;
+    const babyUrl = document.getElementById('cfg-baby-url');
+    if (babyUrl && c.baby_server_url) babyUrl.value = c.baby_server_url;
+    const babyName = document.getElementById('cfg-baby-name');
+    if (babyName && c.baby_sensor_name) babyName.value = c.baby_sensor_name;
+    const babySrc = document.getElementById('cfg-baby-src');
+    if (babySrc && c.baby_source_device) babySrc.value = c.baby_source_device;
+    const babyMac = document.getElementById('cfg-baby-mac');
+    if (babyMac && c.baby_target_mac !== undefined) babyMac.value = c.baby_target_mac;
+
     renderWifiSlots(c.wifi_list, c.active_wifi_slot);
   } catch (e) { console.error(e); }
 }
@@ -848,6 +861,12 @@ async function saveFullConfig() {
     roi_w_pct: parseInt(document.getElementById('rng-rw').value) || 60,
     roi_h_pct: parseInt(document.getElementById('rng-rh').value) || 45,
     roi_draw_osd: document.getElementById('cfg-roi-osd').checked ? 1 : 0,
+    baby_mon_enable: document.getElementById('cfg-baby-en') ? (document.getElementById('cfg-baby-en').checked ? 1 : 0) : 1,
+    baby_lock_flash: document.getElementById('cfg-baby-lock-flash') ? (document.getElementById('cfg-baby-lock-flash').checked ? 1 : 0) : 1,
+    baby_server_url: (document.getElementById('cfg-baby-url')?.value || 'http://10.25.7.116:8686/api/room-env').trim(),
+    baby_sensor_name: (document.getElementById('cfg-baby-name')?.value || 'Govee Phòng Bé Bon').trim(),
+    baby_source_device: (document.getElementById('cfg-baby-src')?.value || 'ESP32-CAM').trim(),
+    baby_target_mac: (document.getElementById('cfg-baby-mac')?.value || '').trim(),
     wifi_list: wifi_list
   };
   const r = await fetch('/api/config', {
@@ -934,6 +953,52 @@ async function updateStatus() {
     const sb = document.getElementById('sd-badge');
     sb.textContent = d.sd_mounted ? `💾 SD: ${(d.sd_free_mb/1024).toFixed(1)}GB` : '☁️ SD Lỏng (Lưu .171)';
     sb.className = 'badge ' + (d.sd_mounted ? 'ok' : 'warn');
+
+    // Baby Monitor & Govee BLE Live Telemetry
+    const bb = document.getElementById('baby-badge');
+    if (bb) {
+      if (d.govee_valid) {
+        bb.textContent = `👶 ${(d.govee_temp_c||0).toFixed(1)}°C | ${(d.govee_humidity_pct||0).toFixed(1)}% | 🔋${d.govee_battery_pct||0}%`;
+        bb.className = 'badge ok';
+      } else {
+        bb.textContent = d.govee_ble_scanning ? `👶 BLE: Đang dò (${d.govee_cycle_sec||0}/10s)...` : `👶 BLE: Chờ cảm biến (${d.govee_cycle_sec||0}/60s)`;
+        bb.className = 'badge info';
+      }
+    }
+    const gvCoex = document.getElementById('gv-coex-badge');
+    if (gvCoex) {
+      gvCoex.textContent = d.govee_ble_scanning
+        ? `📡 Đang quét BLE (${d.govee_cycle_sec||0}/10s)`
+        : `📶 Nghỉ BLE / Ưu tiên Wi-Fi (${d.govee_cycle_sec||0}/60s)`;
+      gvCoex.className = 'badge ' + (d.govee_ble_scanning ? 'warn' : 'ok');
+    }
+    const gvFlLock = document.getElementById('gv-flash-lock-badge');
+    if (gvFlLock) {
+      gvFlLock.textContent = d.baby_lock_flash ? '🌙 Flash GPIO4: Đã Khóa Tắt' : '🔦 Flash GPIO4: Cho phép';
+      gvFlLock.className = 'badge ' + (d.baby_lock_flash ? 'info' : 'warn');
+    }
+    if (d.govee_valid) {
+      const elT = document.getElementById('gv-temp-val');
+      if (elT) elT.textContent = `${(d.govee_temp_c||0).toFixed(1)} °C`;
+      const elH = document.getElementById('gv-hum-val');
+      if (elH) elH.textContent = `${(d.govee_humidity_pct||0).toFixed(1)} %`;
+      const elB = document.getElementById('gv-bat-val');
+      if (elB) elB.textContent = `${d.govee_battery_pct||0} %`;
+      const elMod = document.getElementById('gv-model-tag');
+      if (elMod) elMod.textContent = d.govee_model || 'Govee BLE';
+      const elMac = document.getElementById('gv-mac-sub');
+      if (elMac) elMac.textContent = `MAC: ${d.govee_mac} ${d.govee_name ? '(' + d.govee_name + ')' : ''}`;
+      const elRssi = document.getElementById('gv-rssi-tag');
+      if (elRssi) elRssi.textContent = `${d.govee_rssi || -70} dBm`;
+      const elAge = document.getElementById('gv-age-sub');
+      if (elAge) elAge.textContent = `Cập nhật: ${d.govee_age_sec || 0}s trước (Δ≥0.3°C tự đẩy ngay)`;
+      const elRx = document.getElementById('gv-rx-sub');
+      if (elRx) elRx.textContent = `Gói BLE hợp lệ: ${d.govee_rx_cnt || 0}`;
+    }
+    const elCmd = document.getElementById('gv-cmd-val');
+    if (elCmd) elCmd.textContent = d.govee_auto_cmd ? `❄️ ${d.govee_auto_cmd}` : (d.govee_post_status || 'IDLE');
+    const elPostSub = document.getElementById('gv-post-sub');
+    if (elPostSub) elPostSub.textContent = `POST .116:8686 OK: ${d.govee_post_ok || 0} | Lỗi: ${d.govee_post_err || 0}`;
 
     // Live Stream HUD & Edge LED Indicator + Flash & Countdown
     document.getElementById('hud-ai').textContent = `Motion: ${(d.edge_motion || 0).toFixed(1)}%`;
@@ -1469,6 +1534,13 @@ async function testNtfy() {
   showToast('🔔 Đang gửi thông báo thử...');
   await fetch('/control?var=test_ntfy&val=1');
   showToast('✅ Đã gửi thông báo Ntfy!');
+}
+
+async function forceBabyPostNow() {
+  showToast('🚀 Đang dừng quét BLE & đẩy dữ liệu nhiệt ẩm phòng bé lên 10.25.7.116:8686...');
+  await fetch('/control?var=baby_post_now&val=1');
+  setTimeout(updateStatus, 800);
+  showToast('✅ Đã thực hiện lệnh đẩy dữ liệu phòng bé!');
 }
 
 async function scanWifi() {

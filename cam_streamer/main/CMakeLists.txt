@@ -9,9 +9,12 @@ idf_component_register(
         "osd_stamp.c"
         "net_services.c"
         "app_wireguard.c"
+        "ble_govee.c"
     INCLUDE_DIRS
         "."
     REQUIRES
+        bt
+        esp_coex
         esp_http_server
         esp_http_client
         mqtt

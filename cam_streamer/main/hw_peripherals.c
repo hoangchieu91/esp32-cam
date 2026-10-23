@@ -65,6 +65,10 @@ void app_flash_init(void) {
 
 void app_flash_set_duty(uint8_t duty) {
     if (s_rescue_flag) return;
+    if (g_cfg.baby_lock_flash && duty > 0) {
+        ESP_LOGW(TAG, "Baby Safe Mode active (baby_lock_flash=1): Clamping GPIO 4 White Flash to LOW (0V)");
+        duty = 0;
+    }
     if (!s_flash_initialized) {
         ledc_timer_config_t ledc_timer = {
             .speed_mode       = LEDC_LOW_SPEED_MODE,
@@ -119,6 +123,10 @@ uint8_t app_flash_get_duty(void) {
 
 bool app_flash_pre_capture_assist(void) {
     if (s_rescue_flag) return false;
+    if (g_cfg.baby_lock_flash) {
+        if (s_current_flash_duty != 0) app_flash_set_duty(0);
+        return false;
+    }
     if (g_cfg.flash_duty >= 10) return false;
 
     if (g_cfg.flash_mode == 0) {
