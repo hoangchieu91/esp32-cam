@@ -363,15 +363,15 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
             int32_t *q_buf = (int32_t *)heap_caps_malloc(cells * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
             if (dist && vis && q_buf) {
-                int v_start = (gh * 43) / 100; // Mask top 43% (exclude 5-digit roller box & red unit digit)
+                int v_start = (gh * 40) / 100; // Mask top 40% (exclude 5-digit roller box while keeping full upper tip of D1)
                 int v_end   = (gh * 96) / 100;
                 int u_start = (gw *  4) / 100;
                 int u_end   = (gw * 96) / 100;
 
-                // 1. Sample rotated ROI & segment red pointer pixels
-                for (int gy = v_start; gy < v_end; gy++) {
+                // 1. Sample rotated ROI & segment red pointer pixels (keep 1-px zero border for Chamfer DT)
+                for (int gy = v_start + 1; gy < v_end - 1; gy++) {
                     int v = gy * 2;
-                    for (int gx = u_start; gx < u_end; gx++) {
+                    for (int gx = u_start + 1; gx < u_end - 1; gx++) {
                         int u = gx * 2;
                         int px, py;
                         if (rot == -90) {

@@ -1081,7 +1081,7 @@ class MeterStateTracker:
         with self.lock:
             self.states[device] = {
                 "last_value": round(val, 4),
-                "last_epoch": time.time(),
+                "last_epoch": time.time() - 180.0,
                 "flow_lpm": 0.0,
                 "baseline_seed": f"{val:09.4f}",
                 "updated_at": now_vn_str()
