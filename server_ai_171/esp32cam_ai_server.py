@@ -521,18 +521,51 @@ class SmartMeterVisionEngine:
                 if p[7] >= max(180.0, 0.42 * max_ptr_area)
             ]
 
-        if len(red_pointers) >= 2:
-            # Sort along standard rotary water meter arc: Right-to-Left (x descending)
+        # Match detected red pointer contours to the 3 physical sub-dial rings (x0.01, x0.001, x0.0001)
+        # so stray red reflections outside the 3 sub-dials can NEVER create a false 4th pointer!
+        std_3dial_rings = [
+            (int(rw * 0.862), int(rh * 0.484)),
+            (int(rw * 0.784), int(rh * 0.690)),
+            (int(rw * 0.530), int(rh * 0.758)),
+        ]
+        std_ring_r = int(max(18, round(rw * 0.092)))
+        matched_3dials = []
+        if raw_red_cands:
+            for ax, ay in std_3dial_rings:
+                in_ring = [
+                    p for p in raw_red_cands
+                    if np.hypot(p[0] - ax, p[1] - ay) <= rw * 0.088
+                ]
+                if in_ring:
+                    # Pick largest red pointer contour inside this sub-dial ring
+                    best_p = max(in_ring, key=lambda item: item[7])
+                    matched_3dials.append((ax, ay, best_p))
+
+        if len(matched_3dials) == 3:
+            for idx, (ax, ay, (cx_i, cy_i, tx_i, ty_i, r_i, ang, cf, _area)) in enumerate(matched_3dials):
+                vx, vy = float(tx_i - cx_i), float(ty_i - cy_i)
+                norm = max(1e-3, np.hypot(vx, vy))
+                tx_ring = int(round(ax + (vx / norm) * (std_ring_r * 0.82)))
+                ty_ring = int(round(ay + (vy / norm) * (std_ring_r * 0.82)))
+                cont_val = (ang / 36.0) % 10.0
+                raw_cont.append(cont_val)
+                valid_cnt += 1
+                conf_sum += cf
+                dials_meta.append({
+                    "index": idx,
+                    "scale": round(0.1 ** (idx + 2), 4),
+                    "center": [ax, ay],
+                    "tip": [tx_ring, ty_ring],
+                    "radius": std_ring_r,
+                    "angle_deg": ang,
+                    "raw_float": round(cont_val, 2),
+                    "confidence": cf
+                })
+        elif len(red_pointers) >= 2:
+            # Sort along standard rotary water meter arc: Right-to-Left (x descending), cap at 3 pointers
             red_pointers.sort(key=lambda item: -item[0])
-            red_pointers = red_pointers[:4]
+            red_pointers = red_pointers[:3]
             scale_offset = 2 if len(red_pointers) == 3 else 1
-            # Concentric sub-dial scale ring anchors on GB/T 778-2018 3-pointer meter face
-            std_3dial_rings = [
-                (int(rw * 0.862), int(rh * 0.484)),
-                (int(rw * 0.784), int(rh * 0.690)),
-                (int(rw * 0.530), int(rh * 0.758)),
-            ]
-            std_ring_r = int(max(18, round(rw * 0.092)))
             for idx, (cx_i, cy_i, tx_i, ty_i, r_i, ang, cf) in enumerate(red_pointers):
                 if len(red_pointers) == 3 and idx < 3:
                     ax, ay = std_3dial_rings[idx]

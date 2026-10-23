@@ -499,23 +499,28 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
                                 if (h_wsum > 0.0f) {
                                     float hub_x = h_wx / h_wsum;
                                     float hub_y = h_wy / h_wsum;
-                                    // Find max distance from hub_x, hub_y
-                                    float max_r2 = 0.0f;
+                                    // Find max distance from hub_x, hub_y (sharpest pointer tip)
+                                    float max_r2 = 0.0f, max_dx = 0.0f, max_dy = 0.0f;
                                     for (int i = 0; i < q_tail; i++) {
                                         float dx = (float)(q_buf[i] & 0xFFFF) - hub_x;
                                         float dy = (float)((q_buf[i] >> 16) & 0xFFFF) - hub_y;
                                         float r2 = dx * dx + dy * dy;
-                                        if (r2 > max_r2) max_r2 = r2;
+                                        if (r2 > max_r2) {
+                                            max_r2 = r2;
+                                            max_dx = dx;
+                                            max_dy = dy;
+                                        }
                                     }
-                                    // Average top tip points (>= 82% of max radius)
-                                    float tip_thr2 = max_r2 * 0.68f;
+                                    // Average top tip points (>= 85% of max radius) strictly on the SAME side as (max_dx, max_dy)
+                                    // so the counterweight tail (180 deg opposite) can never pull or flip the pointer angle
+                                    float tip_thr2 = max_r2 * 0.72f;
                                     float t_sx = 0.0f, t_sy = 0.0f, t_cnt = 0.0f;
                                     for (int i = 0; i < q_tail; i++) {
                                         float px = (float)(q_buf[i] & 0xFFFF);
                                         float py = (float)((q_buf[i] >> 16) & 0xFFFF);
                                         float dx = px - hub_x;
                                         float dy = py - hub_y;
-                                        if (dx * dx + dy * dy >= tip_thr2) {
+                                        if ((dx * dx + dy * dy >= tip_thr2) && (dx * max_dx + dy * max_dy > 0.0f)) {
                                             t_sx += px;
                                             t_sy += py;
                                             t_cnt += 1.0f;
@@ -538,12 +543,22 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
                     }
                 }
 
-                // Filter out noise blobs (< 42% of largest pointer blob) & sort by mean_x descending (D1 -> D2 -> D3)
+                // Filter out noise blobs (< 42% of largest pointer blob), keep at most 3 largest pointers, & sort by mean_x descending (D1 -> D2 -> D3)
                 int min_valid_pts = (max_comp_pts * 42) / 100;
                 if (min_valid_pts < 35) min_valid_pts = 35;
+                // Sort candidates by count descending first so top 3 are always the 3 true sub-dial pointers
+                for (int i = 0; i < n_cands - 1; i++) {
+                    for (int j = i + 1; j < n_cands; j++) {
+                        if (cands[j].count > cands[i].count) {
+                            dial_cand_t tmp = cands[i];
+                            cands[i] = cands[j];
+                            cands[j] = tmp;
+                        }
+                    }
+                }
                 dial_cand_t valid_dials[4];
                 for (int i = 0; i < n_cands; i++) {
-                    if (cands[i].count >= min_valid_pts && found_dials < 4) {
+                    if (cands[i].count >= min_valid_pts && found_dials < 3) {
                         valid_dials[found_dials++] = cands[i];
                     }
                 }
