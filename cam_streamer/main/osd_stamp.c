@@ -366,7 +366,7 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
             if (dist && vis && q_buf) {
                 int v_start = (gh * 40) / 100; // Mask top 40% (exclude 5-digit roller box while keeping full upper tip of D1)
                 int v_end   = (gh * 96) / 100;
-                int u_start = (gw *  4) / 100;
+                int u_start = (gw * 40) / 100; // Mask left 40% (exclude left brass ring & serial box; 3 sub-dials sit at 53%..86% gw)
                 int u_end   = (gw * 96) / 100;
 
                 // 1. Sample rotated ROI & segment red pointer pixels (keep 1-px zero border for Chamfer DT)
@@ -395,7 +395,8 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
                         int mn = (g < b) ? g : b;
                         int diff = (int)r - mn;
                         int gb_diff = ((int)g > (int)b) ? ((int)g - (int)b) : ((int)b - (int)g);
-                        if (r >= 35 && diff * 255 >= 38 * (int)r && r >= g && r >= b && gb_diff * 10 <= diff * 9) {
+                        int r_min = (g_last_edge_ai.roi_luma > 0 && g_last_edge_ai.roi_luma < 45) ? 22 : 35;
+                        if (r >= r_min && diff * 255 >= 38 * (int)r && r >= g && r >= b && gb_diff * 10 <= diff * 9) {
                             dist[gy * gw + gx] = 1000;
                         }
                     }
@@ -482,7 +483,7 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
                                 }
                             }
 
-                            if (q_tail >= 35 && n_cands < 8) {
+                            if (q_tail >= 35 && max_d >= 12 && n_cands < 8) {
                                 if (q_tail > max_comp_pts) max_comp_pts = q_tail;
                                 uint16_t hub_thr = (uint16_t)((max_d * 3) / 4);
                                 if (hub_thr < 3) hub_thr = 3;
@@ -600,7 +601,7 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
             if (q_buf) free(q_buf);
         }
 
-        if (found_dials >= 2) {
+        if (found_dials == 3) {
             double base_v = g_cfg.meter_baseline[0] ? atof(g_cfg.meter_baseline) : 0.0;
             if (base_v >= 100.0) base_v /= 10.0; // Auto-normalize legacy 10x baseline (e.g. 0374.843 -> 37.4843)
             int roller_tenths = (int)floor(base_v * 10.0 + 1e-6); // 4 black rollers + 1 red roller (x0.1 m3)
@@ -614,6 +615,10 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
             }
             if (s_edge_prev_val >= 100.0) {
                 s_edge_prev_val /= 10.0;
+            }
+            // If user updated meter_baseline to a higher reading, sync s_edge_prev_val up to base_v
+            if (base_v > s_edge_prev_val + 0.05) {
+                s_edge_prev_val = base_v;
             }
             if (s_edge_prev_val > 0.0) {
                 int prev_tenths = (int)floor(s_edge_prev_val * 10.0 + 1e-6);
@@ -660,15 +665,15 @@ static void run_edge_ai_on_rgb565(const uint8_t *rgb565, uint16_t width, uint16_
             snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail),
                      "[Edge-ESP32] Đỏ .%d + Kim .0%.3s | SN:%.8s",
                      red_tenth, dial_digits, g_cfg.meter_serial[0] ? g_cfg.meter_serial : "00000198");
-        } else if (d_idx > 0) {
+        } else if (g_cfg.meter_mode < 3 && d_idx > 0) {
             decoded_str[d_idx] = '\0';
             snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%s", decoded_str);
             snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail), "[Edge-ESP32 OCR] %s", decoded_str);
-        } else if (g_last_edge_ai.edge_digits[0] >= '0' && g_last_edge_ai.edge_digits[0] <= '9') {
+        } else if (g_last_edge_ai.edge_digits[0] >= '0' && g_last_edge_ai.edge_digits[0] <= '9' && strlen(g_last_edge_ai.edge_digits) >= 6) {
             // Preserve last illuminated independent Edge-ESP32 reading when unlit background frame is dark
-        } else if (g_cfg.meter_baseline[0] != '\0' && g_cfg.meter_mode == 4) {
+        } else if (g_cfg.meter_baseline[0] != '\0' && (g_cfg.meter_mode == 3 || g_cfg.meter_mode == 4)) {
             snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "%.15s", g_cfg.meter_baseline);
-            snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail), "[Edge-ESP32] Khởi tạo từ số gốc V(t-1)");
+            snprintf(g_last_edge_ai.edge_detail, sizeof(g_last_edge_ai.edge_detail), "[Edge-ESP32] Giữ số gốc V(t-1) (Ảnh tối)");
         } else {
             snprintf(g_last_edge_ai.edge_digits, sizeof(g_last_edge_ai.edge_digits), "----");
         }

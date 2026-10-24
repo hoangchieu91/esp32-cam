@@ -561,13 +561,13 @@ class SmartMeterVisionEngine:
                     "raw_float": round(cont_val, 2),
                     "confidence": cf
                 })
-        elif len(red_pointers) >= 2:
+        elif len(red_pointers) == 3:
             # Sort along standard rotary water meter arc: Right-to-Left (x descending), cap at 3 pointers
             red_pointers.sort(key=lambda item: -item[0])
             red_pointers = red_pointers[:3]
-            scale_offset = 2 if len(red_pointers) == 3 else 1
+            scale_offset = 2
             for idx, (cx_i, cy_i, tx_i, ty_i, r_i, ang, cf) in enumerate(red_pointers):
-                if len(red_pointers) == 3 and idx < 3:
+                if idx < 3:
                     ax, ay = std_3dial_rings[idx]
                     if np.hypot(cx_i - ax, cy_i - ay) <= rw * 0.08:
                         vx, vy = float(tx_i - cx_i), float(ty_i - cy_i)
@@ -591,59 +591,8 @@ class SmartMeterVisionEngine:
                     "confidence": cf
                 })
         else:
-            # 2. Fallback: HoughCircles + 4-Zone layout
-            gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-            blur = cv2.GaussianBlur(gray, (5, 5), 1.2)
-
-            min_r = max(8, int(min(rw, rh) * 0.07))
-            max_r = max(min_r + 6, int(min(rw, rh) * 0.28))
-            circles = cv2.HoughCircles(
-                blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=max(16, rw // 5),
-                param1=75, param2=24, minRadius=min_r, maxRadius=max_r
-            )
-
-            dial_rois = []
-            if circles is not None and len(circles[0]) >= 2:
-                c_list = sorted(circles[0], key=lambda c: c[0])[:4]
-                for (cx, cy, r) in c_list:
-                    cx_i, cy_i, r_i = int(round(cx)), int(round(cy)), int(round(r))
-                    x0 = max(0, cx_i - r_i)
-                    y0 = max(0, cy_i - r_i)
-                    x1 = min(rw, cx_i + r_i)
-                    y1 = min(rh, cy_i + r_i)
-                    if (x1 - x0) >= 12 and (y1 - y0) >= 12:
-                        dial_rois.append((x0, y0, x1 - x0, y1 - y0, cx_i, cy_i, r_i))
-
-            if len(dial_rois) < 2:
-                dial_rois = []
-                sub_w = rw // 4
-                sub_y0 = int(rh * 0.35) if (lcd_res.get("value", "----") != "----" and rh >= 60) else 0
-                sub_h = rh - sub_y0
-                r_est = max(6, min(sub_w, sub_h) // 2 - 2)
-                for k in range(4):
-                    sx0 = k * sub_w
-                    cx_i = sx0 + sub_w // 2
-                    cy_i = sub_y0 + sub_h // 2
-                    dial_rois.append((sx0, sub_y0, sub_w, sub_h, cx_i, cy_i, r_est))
-
-            for idx, (dx0, dy0, dw, dh, cx_i, cy_i, r_i) in enumerate(dial_rois):
-                patch = roi_bgr[dy0:dy0+dh, dx0:dx0+dw]
-                ang, cf, (pcx, pcy), (ptx, pty) = cls._extract_pointer_angle(patch)
-                cont_val = (ang / 36.0) % 10.0
-                raw_cont.append(cont_val)
-                if cf > 0.1:
-                    valid_cnt += 1
-                    conf_sum += cf
-                dials_meta.append({
-                    "index": idx,
-                    "scale": round(0.1 ** (idx + 1), 4),
-                    "center": [int(dx0 + pcx), int(dy0 + pcy)],
-                    "tip": [int(dx0 + ptx), int(dy0 + pty)],
-                    "radius": int(r_i),
-                    "angle_deg": ang,
-                    "raw_float": round(cont_val, 2),
-                    "confidence": round(cf, 2)
-                })
+            # Pitch-dark or occluded frame (< 3 red pointers visible): return "----" so MeterStateTracker holds V(t-1)
+            return {"raw_fraction": 0.0, "dial_digits": "----", "dials": [], "confidence": 0.0}
 
         if valid_cnt == 0:
             return {"raw_fraction": 0.0, "dial_digits": "----", "dials": [], "confidence": 0.0}
@@ -981,6 +930,9 @@ class SmartMeterVisionEngine:
         id_res = cls.analyze_meter_identity(roi, dial_res, meter_serial, meter_spec, serial_auto)
         resolved_serial = id_res["meter_serial"]
         resolved_spec = id_res["meter_spec"]
+        if int(mode) == 3 or "GB/T" in str(resolved_spec) or dial_res.get("dial_digits", "----") != "----":
+            seg7_res = {"value": "----", "detail": "Chế độ đồng hồ cơ (Tắt LED 7-thanh)", "boxes": []}
+            lcd_res["boxes"] = []
 
         # Multi-Screen Cycling Meter Analysis & Per-Screen State Tracking
         ms_frame = cls.analyze_multi_screen(roi, lcd_res, seg7_res)

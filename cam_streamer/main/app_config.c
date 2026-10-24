@@ -377,7 +377,7 @@ void app_config_reset_defaults(void) {
 
     // Baby Monitor & Govee BLE Room Environment Gateway defaults
     g_cfg.baby_mon_enable = true;
-    g_cfg.baby_lock_flash = true; // Force GPIO 4 = LOW at night so newborn is never blinded
+    g_cfg.baby_lock_flash = false; // Default false on Water Meter camera so Smart Auto Flash (11% PWM) works at night
     strncpy(g_cfg.baby_server_url, "http://10.25.7.116:8686/api/room-env", sizeof(g_cfg.baby_server_url) - 1);
     strncpy(g_cfg.baby_sensor_name, "Govee Phòng Bé Bon", sizeof(g_cfg.baby_sensor_name) - 1);
     strncpy(g_cfg.baby_source_device, "ESP32-CAM", sizeof(g_cfg.baby_source_device) - 1);
