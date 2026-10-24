@@ -483,9 +483,9 @@ class SmartMeterVisionEngine:
         b_ch, g_ch, r_ch = cv2.split(roi_bgr)
         rg_diff = r_ch.astype(np.int16) - np.maximum(g_ch, b_ch).astype(np.int16)
         red_mask = ((((hc <= 16) | (hc >= 160)) & (sc >= 45) & (vc >= 36)) | (rg_diff >= 22)).astype(np.uint8) * 255
-        # Mask out upper horizontal roller drum zone (H 0037.3 m3 sits at y ~ 0.25..0.39*rh)
-        red_mask[:int(rh * 0.41), :] = 0
-        red_mask[:, :2] = 0
+        # Mask out upper horizontal roller drum zone and left brass/roller margin
+        red_mask[:int(rh * 0.33), :] = 0
+        red_mask[:, :int(rw * 0.38)] = 0
         red_mask[:, max(0, rw - 2):] = 0
         k_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, k_el)
@@ -534,7 +534,7 @@ class SmartMeterVisionEngine:
             for ax, ay in std_3dial_rings:
                 in_ring = [
                     p for p in raw_red_cands
-                    if np.hypot(p[0] - ax, p[1] - ay) <= rw * 0.088
+                    if np.hypot(p[0] - ax, p[1] - ay) <= rw * 0.16
                 ]
                 if in_ring:
                     # Pick largest red pointer contour inside this sub-dial ring
