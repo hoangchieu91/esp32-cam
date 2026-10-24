@@ -33,7 +33,7 @@ IDF_EXPORT_PS1 = Path(r"C:\Users\nguye\esp\v5.5.1\esp-idf\export.ps1")
 
 import socket
 
-DEFAULT_ESP_HOSTS = ["10.25.7.100", "10.212.156.7", "esp32-cam.local"]
+DEFAULT_ESP_HOSTS = ["10.25.7.173", "10.25.7.100", "10.212.156.7", "esp32-cam.local"]
 AI_SERVER_CANDIDATES = ["10.25.7.171", "100.117.215.125"]
 AI_SERVER_USER = "root"
 AI_SERVER_PASS = "123"

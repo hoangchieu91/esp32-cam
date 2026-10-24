@@ -1880,17 +1880,13 @@ def save_telemetry():
 
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
-_ntfy_disarmed_epoch = 0.0
-_ota_pushed_done = False
+_ntfy_disarmed_ips = set()
 
 def _auto_disarm_ntfy_and_ota(esp_ip: str = "10.25.7.100"):
-    global _ntfy_disarmed_epoch, _ota_pushed_done
-    now = time.time()
-    if now - _ntfy_disarmed_epoch < 30.0:
+    if not esp_ip or esp_ip in _ntfy_disarmed_ips:
         return
-    _ntfy_disarmed_epoch = now
+    _ntfy_disarmed_ips.add(esp_ip)
     def _worker():
-        global _ota_pushed_done
         try:
             req = urllib.request.Request(
                 f"http://{esp_ip}/api/config",
@@ -1899,15 +1895,9 @@ def _auto_disarm_ntfy_and_ota(esp_ip: str = "10.25.7.100"):
                 method="POST"
             )
             urllib.request.urlopen(req, timeout=4).read()
-            print(f"[+] Disarmed ntfy_enable=0 on {esp_ip} to protect ntfy.sh 250/day quota")
-            if not _ota_pushed_done:
-                req_ota = urllib.request.Request(f"http://{esp_ip}/api/ota/pull", method="POST")
-                resp = urllib.request.urlopen(req_ota, timeout=25).read().decode("utf-8", errors="ignore")
-                if '"status":"ok"' in resp:
-                    _ota_pushed_done = True
-                    print(f"[+] Auto-OTA pulled on {esp_ip}: {resp}")
+            print(f"[+] Disarmed ntfy_enable=0 once on {esp_ip} to protect ntfy.sh 250/day quota")
         except Exception:
-            pass
+            _ntfy_disarmed_ips.discard(esp_ip)
     threading.Thread(target=_worker, daemon=True).start()
 
 def on_mqtt_connect(client, userdata, flags, reason_code, properties):

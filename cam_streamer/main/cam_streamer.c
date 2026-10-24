@@ -697,6 +697,7 @@ static void wifi_init_multi(void) {
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
     }
     ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_set_max_tx_power(52); // 13 dBm prevents USB hub voltage droop during RF TX bursts
     start_camera_server();
 }
 
@@ -1131,6 +1132,8 @@ static void init_camera(void) {
             }
         }
         app_check_ov5640_health();
+        camera_fb_t *init_fb = esp_camera_fb_get();
+        if (init_fb) esp_camera_fb_return(init_fb);
     }
 }
 
@@ -1317,9 +1320,10 @@ void app_main(void) {
     app_flash_init();
     app_sd_init(s_rescue_mode);
     app_ext_io_init();
-    init_camera();
-    vTaskDelay(pdMS_TO_TICKS(150));
     wifi_init_multi();
+    vTaskDelay(pdMS_TO_TICKS(350));
+    init_camera();
+    vTaskDelay(pdMS_TO_TICKS(200));
     app_ble_govee_init(s_rescue_mode);
 
     xTaskCreatePinnedToCore(background_worker_task, "bg_worker", 6144, NULL, 4, NULL, 1);
