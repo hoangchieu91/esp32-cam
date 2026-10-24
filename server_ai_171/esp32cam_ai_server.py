@@ -1880,6 +1880,36 @@ def save_telemetry():
 
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
+_ntfy_disarmed_epoch = 0.0
+_ota_pushed_done = False
+
+def _auto_disarm_ntfy_and_ota(esp_ip: str = "10.25.7.100"):
+    global _ntfy_disarmed_epoch, _ota_pushed_done
+    now = time.time()
+    if now - _ntfy_disarmed_epoch < 30.0:
+        return
+    _ntfy_disarmed_epoch = now
+    def _worker():
+        global _ota_pushed_done
+        try:
+            req = urllib.request.Request(
+                f"http://{esp_ip}/api/config",
+                data=b'{"ntfy_enable":0}',
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            urllib.request.urlopen(req, timeout=4).read()
+            print(f"[+] Disarmed ntfy_enable=0 on {esp_ip} to protect ntfy.sh 250/day quota")
+            if not _ota_pushed_done:
+                req_ota = urllib.request.Request(f"http://{esp_ip}/api/ota/pull", method="POST")
+                resp = urllib.request.urlopen(req_ota, timeout=25).read().decode("utf-8", errors="ignore")
+                if '"status":"ok"' in resp:
+                    _ota_pushed_done = True
+                    print(f"[+] Auto-OTA pulled on {esp_ip}: {resp}")
+        except Exception:
+            pass
+    threading.Thread(target=_worker, daemon=True).start()
+
 def on_mqtt_connect(client, userdata, flags, reason_code, properties):
     print(f"[+] Connected to local MQTT broker ({reason_code})")
     client.subscribe("esp32cam/#")
@@ -1896,6 +1926,7 @@ def on_mqtt_message(client, userdata, msg):
             latest_telemetry["_recv_epoch"] = time.time()
             latest_telemetry["online"] = True
             save_telemetry()
+            _auto_disarm_ntfy_and_ota(latest_telemetry.get("ip", "10.25.7.100"))
         elif topic.endswith("/status"):
             data = json.loads(payload)
             if data.get("online") is False or data.get("state") == "OFFLINE":

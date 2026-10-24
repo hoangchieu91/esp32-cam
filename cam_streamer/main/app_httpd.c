@@ -264,14 +264,18 @@ static esp_err_t execute_capture_pipeline(const char *mode, char *out_filename, 
         free(mqtt_event);
     }
 
-    // 5. Send Ntfy Notification if enabled
-    if (g_cfg.ntfy_enable && !ai_only) {
+    // 5. Send Ntfy Notification ONLY on explicit critical alerts with strict 6-hour rate-limit (protects ntfy.sh 250/day quota)
+    static int64_t s_last_ntfy_us = 0;
+    bool is_explicit_alert = (mode && strcmp(mode, "alert") == 0);
+    int64_t now_us = esp_timer_get_time();
+    if (g_cfg.ntfy_enable && is_explicit_alert && (s_last_ntfy_us == 0 || (now_us - s_last_ntfy_us) >= 21600LL * 1000000LL)) {
+        s_last_ntfy_us = now_us;
         char *ntfy_msg = (char *)calloc(1, 512);
         if (ntfy_msg) {
             snprintf(ntfy_msg, 512,
-                     "[%s] Đã chụp: %s (%u KB) | FTP: %s | Motion: %.1f%% | AI: %.240s",
+                     "[%s] Cảnh báo: %s (%u KB) | FTP: %s | AI: %.240s",
                      g_cfg.device_name, base_name, (unsigned)(work_len / 1024),
-                     ftp_err, g_last_edge_ai.motion_score,
+                     ftp_err,
                      (ai_ret == ESP_OK && ai_resp && ai_resp[0]) ? ai_resp : "Hoàn tất");
             net_ntfy_send("ESP32-CAM AI Alert", ntfy_msg, "default", "camera,robot", "http://10.25.7.171:8095");
             free(ntfy_msg);

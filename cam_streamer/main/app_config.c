@@ -307,8 +307,8 @@ void app_config_reset_defaults(void) {
     strncpy(g_cfg.mqtt_topic_prefix, "esp32cam", sizeof(g_cfg.mqtt_topic_prefix) - 1);
     g_cfg.mqtt_interval_sec = 5;
 
-    // Default Ntfy -> 10.25.7.116:8092/esp32cam
-    g_cfg.ntfy_enable = true;
+    // Default Ntfy -> OFF by default to protect ntfy.sh 250/day upstream quota on 10.25.7.116:8092
+    g_cfg.ntfy_enable = false;
     strncpy(g_cfg.ntfy_url, "http://10.25.7.116:8092/esp32cam", sizeof(g_cfg.ntfy_url) - 1);
     g_cfg.ntfy_token[0] = '\0';
 
@@ -348,7 +348,8 @@ void app_config_reset_defaults(void) {
     g_cfg.cam_vflip = 1;
     g_cfg.af_mode = 1;
     g_cfg.af_manual_pos = 620;
-    g_cfg.flash_duty = 0;        // Always OFF when idle
+    g_cfg.flash_duty = 0;
+    g_cfg.ntfy_enable = false; // Force disable continuous Ntfy spam on boot to protect 250/day ntfy.sh quota        // Always OFF when idle
     g_cfg.flash_mode = 1;        // 1 = Smart Auto Fill-Light ONLY when ambient scene is dark
     g_cfg.flash_cap_duty = 28;   // ~11% PWM anti-glare soft illumination for water meter glass
     g_cfg.flash_warmup_ms = 350; // 350ms AE/AWB settle time before snapping
@@ -421,6 +422,7 @@ void app_config_init(void) {
 
     // Never persist continuous manual torch across reboots (prevents 24/7 LED glare/heating)
     g_cfg.flash_duty = 0;
+    g_cfg.ntfy_enable = false; // Force disable continuous Ntfy spam on boot to protect 250/day ntfy.sh quota
 
     // 2. Always overlay WireGuard & 5-WiFi from Dedicated Flash Partition "vpn_vault" @ 0x3FC000
     if (load_flash_vpn_vault()) {
